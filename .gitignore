@@ -21,6 +21,10 @@ ENV/
 *.swp
 *.swo
 
+# Temporary scratch scripts & audit dumps
+scratch/
+tiktok_shop_mitm.py
+
 # OS files
 .DS_Store
 Thumbs.db
