@@ -139,3 +139,120 @@ class TikTokEvent(NamedTuple):
             return int(self.data.get("diamond_total") or self.data.get("gift", {}).get("diamondCount") or 0)
         return 0
 
+    @property
+    def user_unique_id(self) -> str:
+
+        """Tên tài khoản duy nhất (TikTok Handle) của người dùng."""
+        u = self.user
+        return str(u.get("unique_id") or u.get("uniqueId") or "")
+
+    @property
+    def sec_uid(self) -> str:
+        """Mã SecUID bảo mật của người dùng."""
+        u = self.user
+        return str(u.get("sec_uid") or u.get("secUid") or "")
+
+    @property
+    def avatar_url(self) -> str:
+        """Đường dẫn URL ảnh đại diện của người dùng."""
+        u = self.user
+        thumb = u.get("avatar_thumb") or u.get("avatarThumb") or {}
+        urls = thumb.get("url_list") or thumb.get("urlList") or []
+        return str(urls[0]) if urls else ""
+
+    @property
+    def like_count(self) -> int:
+        """Số lượt tim vừa thả nếu là sự kiện Like."""
+        if isinstance(self.data, dict):
+            return int(self.data.get("count") or 1)
+        return 1
+
+    @property
+    def total_likes(self) -> int:
+        """Tổng số tim tích lũy toàn phòng nếu là sự kiện Like."""
+        if isinstance(self.data, dict):
+            return int(self.data.get("total") or 0)
+        return 0
+
+    @property
+    def viewer_count(self) -> int:
+        """Số người đang xem trực tiếp nếu là sự kiện Thống kê / Vào phòng."""
+        if isinstance(self.data, dict):
+            return int(self.data.get("viewerCount") or self.data.get("viewer_count") or self.data.get("memberCount") or self.data.get("member_count") or 0)
+        return 0
+
+    @property
+    def total_users(self) -> int:
+        """Tổng lượt người đã ghé qua phòng nếu là sự kiện Thống kê."""
+        if isinstance(self.data, dict):
+            return int(self.data.get("totalUser") or self.data.get("total_user") or 0)
+        return 0
+
+    @property
+    def product_id(self) -> str:
+        """Mã Sản Phẩm (Product ID) nếu là sự kiện TikTok Shop."""
+        if isinstance(self.data, dict):
+            raw = self.data.get("productIdRaw") or self.data.get("product_id_raw") or self.data.get("product_id")
+            if raw:
+                import base64, io
+                try:
+                    raw_bytes = base64.b64decode(raw) if isinstance(raw, str) else raw
+                    stream = io.BytesIO(raw_bytes)
+                    while True:
+                        b = stream.read(1)
+                        if not b:
+                            break
+                        res, shift = 0, 0
+                        while True:
+                            byte = b[0]
+                            res |= (byte & 0x7F) << shift
+                            if not (byte & 0x80):
+                                break
+                            shift += 7
+                            b = stream.read(1)
+                            if not b:
+                                break
+                        if res > 1000000000:
+                            return str(res)
+                except Exception:
+                    pass
+            return str(self.data.get("product_id") or "")
+        return ""
+
+    @property
+    def is_host(self) -> bool:
+        """Khán giả có phải là Streamer / Chủ phòng hay không."""
+        ident = self.user.get("user_identity") or self.user.get("userIdentity") or {}
+        return bool(ident.get("is_anchor") or ident.get("isAnchor"))
+
+    @property
+    def is_mod(self) -> bool:
+        """Khán giả có phải là Quản trị viên (Moderator) hay không."""
+        ident = self.user.get("user_identity") or self.user.get("userIdentity") or {}
+        return bool(ident.get("is_moderator") or ident.get("isModerator"))
+
+    @property
+    def is_sub(self) -> bool:
+        """Khán giả có phải là Hội viên trả phí (Subscriber) hay không."""
+        ident = self.user.get("user_identity") or self.user.get("userIdentity") or {}
+        return bool(ident.get("is_subscriber") or ident.get("isSubscriber"))
+
+    @property
+    def is_fan(self) -> bool:
+        """Khán giả có tham gia Câu lạc bộ Fan Club hay không."""
+        fc = self.user.get("fans_club_info") or self.user.get("fansClubInfo") or {}
+        return bool(fc.get("club_name") or fc.get("clubName"))
+
+    @property
+    def fans_club_name(self) -> str:
+        """Tên câu lạc bộ Fan Club của người dùng."""
+        fc = self.user.get("fans_club_info") or self.user.get("fansClubInfo") or {}
+        return str(fc.get("club_name") or fc.get("clubName") or "")
+
+    @property
+    def fans_club_level(self) -> int:
+        """Cấp độ Fan Club của người dùng."""
+        fc = self.user.get("fans_club_info") or self.user.get("fansClubInfo") or {}
+        return int(fc.get("level") or 0)
+
+
