@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
-from typing import Any, List, NamedTuple
+from typing import Any, Dict, List, NamedTuple, Optional
+
 
 
 
@@ -262,12 +263,13 @@ class TikTokEvent(NamedTuple):
         pid = self.product_id
         return f"https://shop.tiktok.com/vn/pdp/{pid}" if pid else ""
 
-    def canonical_product_info(self, region: str = "vn") -> ProductInfo:
+    def canonical_product_info(self, region: str = "vn", product_id: Optional[str] = None) -> ProductInfo:
         """Tự động resolve link SEO hoàn chỉnh, trích xuất tên sản phẩm tiếng Việt, ảnh thumbnail #1 gốc, gian hàng và lượt bán."""
-        pid = self.product_id
+        pid = str(product_id) if product_id else self.product_id
 
         if not pid:
             return ProductInfo()
+
         from curl_cffi import requests
         import html as html_lib, re, urllib.parse
         url = f"https://shop.tiktok.com/{region.lower()}/pdp/{pid}"

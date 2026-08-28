@@ -140,14 +140,16 @@ async def main():
         print("=" * 85 + "\n", flush=True)
 
     active_product_id: str = ""
+    active_product_info: Optional[ProductInfo] = None
 
     # ============================================================
     # 2. SỰ KIỆN TIKTOK SHOP CHÍNH THỨC (OEC LIVE SHOPPING)
     # ============================================================
     @client.on(EventType.oec_live_shopping)
     def on_oec_shopping(evt):
-        nonlocal active_product_id
+        nonlocal active_product_id, active_product_info
         data = evt.data or {}
+
         action_type = evt.action_type or 1
         
         # Bóc tách Product ID mới (nếu có) hoặc duy trì Product ID đang được ghim
@@ -155,16 +157,16 @@ async def main():
         if new_pid:
             active_product_id = new_pid
             action_desc = "Streamer vừa bấm GHIM SẢN PHẨM MỚI (SetPinProduct)"
+            active_product_info = evt.canonical_product_info(region="vn")
         else:
             action_desc = "Duy trì / Làm mới hiển thị thẻ sản phẩm đang ghim (Card Refresh)"
             
-        product_id = active_product_id
-        
-        # Tự động resolve Link SEO không bị Captcha, Tên sản phẩm và Ảnh đại diện
-        info = evt.canonical_product_info(region="vn")
+        info = active_product_info or evt.canonical_product_info(region="vn", product_id=active_product_id)
+        product_id = active_product_id or info.product_id
         canonical_link = info.url or (f"https://shop.tiktok.com/vn/pdp/{product_id}" if product_id else "")
         product_title = info.title
         product_image = info.image
+
 
         # Bóc tách Shopping Data Blob
         blob = data.get("shoppingDataBlob") or data.get("shopping_data_blob")

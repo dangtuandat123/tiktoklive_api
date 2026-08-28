@@ -55,6 +55,8 @@ async def main():
     streak_tracker = GiftStreakTracker()
     like_acc = LikeAccumulator()
     active_product_id: str = ""
+    active_product_info: Optional[ProductInfo] = None
+
 
     # ============================================================
     # TỰ ĐỘNG CẤP COOKIE TTWID (Bypass anti-bot 100% bằng Playwright)
@@ -205,7 +207,7 @@ async def main():
     # ============================================================
     @client.on(EventType.oec_live_shopping)
     def on_shopping(evt):
-        nonlocal active_product_id
+        nonlocal active_product_id, active_product_info
         action_type = evt.action_type or 1
 
         # Bóc tách Product ID mới hoặc duy trì ID đang được ghim
@@ -213,16 +215,16 @@ async def main():
         if new_pid:
             active_product_id = new_pid
             action_desc = "Streamer vừa bấm GHIM SẢN PHẨM MỚI (SetPinProduct)"
+            active_product_info = evt.canonical_product_info(region="vn")
         else:
             action_desc = "Duy trì / Làm mới hiển thị thẻ sản phẩm đang ghim (Card Refresh)"
 
-        product_id = active_product_id
-        
-        # Tự động trích xuất thông tin SEO, Tên tiếng Việt gốc, Ảnh Thumbnail #1 HD, Gian hàng và Lượt bán
-        info = evt.canonical_product_info(region="vn")
+        info = active_product_info or evt.canonical_product_info(region="vn", product_id=active_product_id)
+        product_id = active_product_id or info.product_id
         canonical_link = info.url or (f"https://shop.tiktok.com/vn/pdp/{product_id}" if product_id else "")
         product_title = info.title
         product_image = info.image
+
 
         print("\n" + "🔥" * 45, flush=True)
         print(f"[{get_time_str()}] [🛍️ TIKTOK SHOP - PHÁT HIỆN SỰ KIỆN GIỎ HÀNG / GHIM SẢN PHẨM!]", flush=True)
