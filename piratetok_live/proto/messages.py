@@ -318,7 +318,15 @@ class WebcastViewerPicksUpdateMessage(betterproto.Message):
     picks_blob: bytes = betterproto.bytes_field(3)
 
 
+@dataclass(eq=False, repr=False)
+class WebcastPrivilegeAdvanceMessage(betterproto.Message):
+    common: "Common" = betterproto.message_field(1)
+    notify_blob: bytes = betterproto.bytes_field(2)
+    scene: str = betterproto.string_field(17)
+
+
 # === Secondary events ===
+
 
 
 @dataclass(eq=False, repr=False)

@@ -45,7 +45,9 @@ _METHOD_MAP: Dict[str, str] = {
     "WebcastRankTextMessage": EventType.rank_text,
     "WebcastGiftDynamicRestrictionMessage": EventType.gift_dynamic_restriction,
     "WebcastViewerPicksUpdateMessage": EventType.viewer_picks_update,
+    "WebcastPrivilegeAdvanceMessage": EventType.privilege_advance,
     "WebcastAccessControlMessage": EventType.access_control,
+
     "WebcastAccessRecallMessage": EventType.access_recall,
     "WebcastAlertBoxAuditResultMessage": EventType.alert_box_audit_result,
     "WebcastBindingGiftMessage": EventType.binding_gift,

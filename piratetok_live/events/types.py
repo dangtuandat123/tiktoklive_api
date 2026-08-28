@@ -58,6 +58,8 @@ class EventType:
     rank_text = "rank_text"
     gift_dynamic_restriction = "gift_dynamic_restriction"
     viewer_picks_update = "viewer_picks_update"
+    privilege_advance = "privilege_advance"
+
 
     # secondary
     access_control = "access_control"
