@@ -139,6 +139,11 @@ class TikTokLiveClient:
         self._cookies = cookies
         return self
 
+    def room_id(self, rid: str) -> "TikTokLiveClient":
+        """Gán trước Room ID (giúp bỏ qua bước HTTP check_online khi chạy hàng trăm luồng song song)."""
+        self._room_id = str(rid)
+        return self
+
     def on(self, event_type: str) -> Callable:
         """Decorator to register an event listener."""
         def decorator(fn: Callable) -> Callable:
@@ -157,20 +162,22 @@ class TikTokLiveClient:
                 pass
 
     async def connect(self) -> str:
-
         """Connect to TikTok Live with auto-reconnection. Returns room_id."""
         lang = self._language if self._language else system_language()
         reg = self._region if self._region else system_region()
         accept_lang = f"{lang}-{reg},{lang};q=0.9"
 
-        room = check_online(
-            self._username, self._timeout,
-            proxy=self._proxy, user_agent=self._user_agent,
-            language=lang, region=reg,
-        )
-        self._room_id = room.room_id
+        if not getattr(self, "_room_id", ""):
+            room = check_online(
+                self._username, self._timeout,
+                proxy=self._proxy, user_agent=self._user_agent,
+                language=lang, region=reg,
+            )
+            self._room_id = room.room_id
+
         self._stop = asyncio.Event()
-        self._emit(TikTokEvent(EventType.connected, {"room_id": room.room_id}, room.room_id))
+        self._emit(TikTokEvent(EventType.connected, {"room_id": self._room_id}, self._room_id))
+
 
         attempt = 0
         while not self._stop.is_set():

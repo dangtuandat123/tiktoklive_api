@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import os
 import sys
+sys.path.insert(0, ".")
 import time
 from typing import Dict, List, Optional, Any
 
@@ -171,12 +172,14 @@ async def run_single_worker(
     worker_id: int,
     username: str,
     ttwid_token: str,
+    room_id: str,
     monitor: BenchmarkMonitor,
     proxy_url: Optional[str] = None,
 ):
     """Một worker client độc lập trong tổng số 200 luồng."""
     client = (
         TikTokLiveClient(username)
+        .room_id(room_id)
         .max_retries(3)
         .stale_timeout(45.0)
         .cookies(f"ttwid={ttwid_token}")
@@ -232,9 +235,8 @@ async def stats_reporter_loop(monitor: BenchmarkMonitor, interval_sec: int = 5):
 
 async def main():
     username = "swatchesbybaobao"
-    total_workers = 200           # Số lượng luồng mong muốn
-    concurrency_limit = 20        # Số lượng kết nối mở đồng thời mỗi đợt
-    ramp_up_delay = 0.05          # Độ trễ giữa mỗi client (50ms)
+    total_workers = 200           # Số lượng luồng mong muốn (200 luồng)
+    ramp_up_delay = 0.05          # Khởi động mỗi luồng cách nhau 50ms (10 giây để bật đủ 200 luồng)
 
     print("\n" + "=" * 95)
     print(f"🚀 KHỞI ĐỘNG BENCHMARK KIỂM TRA ĐỘ ỔN ĐỊNH VÀ CHỊU TẢI: {total_workers} LUỒNG ĐỒNG THỜI")
@@ -246,27 +248,33 @@ async def main():
     print(f"[*] Đang chuẩn bị token TTWID xác thực an toàn qua Playwright...")
     try:
         ttwid = get_ttwid(username)
-        print(f"[+] Đã cấp TTWID thành công: {ttwid[:20]}...\n")
+        print(f"[+] Đã cấp TTWID thành công: {ttwid[:20]}...")
     except Exception as e:
         print(f"[!] Cảnh báo lấy TTWID: {e}, sẽ để client tự sinh token.")
         ttwid = ""
+
+    # 2. Khám phá Room ID một lần duy nhất dùng chung cho 200 luồng
+    print(f"[*] Đang kiểm tra phòng Live của @{username}...")
+    try:
+        room_res = TikTokLiveClient.check_online(username)
+        room_id = room_res.room_id
+        print(f"[+] Tìm thấy phòng Live ID: {room_id}\n")
+    except Exception as e:
+        print(f"[!] Không thể lấy Room ID ({e}), sẽ để từng worker tự tìm.")
+        room_id = ""
 
     monitor = BenchmarkMonitor(target_workers=total_workers)
 
     # Khởi chạy task in Dashboard định kỳ mỗi 5 giây
     reporter_task = asyncio.create_task(stats_reporter_loop(monitor, interval_sec=5))
 
-    # Semaphore kiểm soát tốc độ kết nối ban đầu
-    semaphore = asyncio.Semaphore(concurrency_limit)
-
-    async def worker_wrapper(w_id: int):
-        async with semaphore:
-            await asyncio.sleep(w_id * ramp_up_delay)
-            await run_single_worker(w_id, username, ttwid, monitor)
-
-    # Khởi chạy 200 workers song song
-    print(f"[*] Đang kết nối dần {total_workers} luồng vào phòng Live (Staggered Ramp-up)...")
-    tasks = [asyncio.create_task(worker_wrapper(i + 1)) for i in range(total_workers)]
+    # Khởi chạy 200 workers song song (Khởi động tuần tự 50ms/worker không bị nghẽn)
+    print(f"[*] Đang kết nối dần {total_workers} luồng vào phòng Live (Staggered Ramp-up 50ms/worker)...")
+    tasks = []
+    for i in range(total_workers):
+        w_id = i + 1
+        tasks.append(asyncio.create_task(run_single_worker(w_id, username, ttwid, room_id, monitor)))
+        await asyncio.sleep(ramp_up_delay)
 
     try:
         await asyncio.gather(*tasks, return_exceptions=True)
