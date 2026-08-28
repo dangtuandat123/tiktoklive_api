@@ -147,12 +147,17 @@ class TikTokLiveClient:
         return decorator
 
     def _emit(self, event: TikTokEvent) -> None:
-        for fn in self._listeners.get(event.type, []):
-            fn(event)
-        for fn in self._listeners.get("*", []):
-            fn(event)
+        listeners = self._listeners.get(event.type, []) + self._listeners.get("*", [])
+        for fn in listeners:
+            try:
+                res = fn(event)
+                if asyncio.iscoroutine(res):
+                    asyncio.create_task(res)
+            except Exception:
+                pass
 
     async def connect(self) -> str:
+
         """Connect to TikTok Live with auto-reconnection. Returns room_id."""
         lang = self._language if self._language else system_language()
         reg = self._region if self._region else system_region()
