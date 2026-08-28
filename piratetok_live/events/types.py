@@ -309,7 +309,7 @@ class TikTokEvent(NamedTuple):
                 ordered_1200: List[str] = []
                 ordered_800: List[str] = []
                 for m in all_matches:
-                    clean = html_lib.unescape(m)
+                    clean = html_lib.unescape(m).split("?")[0]
                     if "crop-webp:1200:1200" in clean and clean not in seen_urls:
                         seen_urls.add(clean)
                         ordered_1200.append(clean)
@@ -320,6 +320,7 @@ class TikTokEvent(NamedTuple):
                 images_list = ordered_1200 or ordered_800
                 if images_list:
                     main_image = images_list[0]
+
             except Exception:
                 pass
 
