@@ -288,15 +288,17 @@ class TikTokEvent(NamedTuple):
                 if h1_m:
                     full_title = re.sub(r"<[^>]+>", "", h1_m.group(1)).strip()
                     
-                # Bóc tách ảnh sản phẩm
+                # Bóc tách ảnh sản phẩm HD (1200x1200 hoặc 800x800, bỏ qua các icon/sticker badge)
                 raw_imgs = set(re.findall(r'https://[^"\'\s<>\\]*ibyteimg\.com/[^"\'\s<>\\]+', raw_html))
-                origin_imgs = [html_lib.unescape(i) for i in raw_imgs if "origin-image" in i]
-                resize_imgs = [html_lib.unescape(i) for i in raw_imgs if "resize-webp" in i or "crop-webp" in i]
-                images_list = origin_imgs + resize_imgs
+                hd_1200 = [html_lib.unescape(i) for i in raw_imgs if "crop-webp:1200:1200" in i]
+                hd_800 = [html_lib.unescape(i) for i in raw_imgs if "resize-webp:800:800" in i]
+                other_product = [html_lib.unescape(i) for i in raw_imgs if ("resize-webp" in i or "crop-webp" in i) and "origin-image" not in i]
+                images_list = hd_1200 or hd_800 or other_product
                 if images_list:
                     main_image = images_list[0]
             except Exception:
                 pass
+
 
             if not full_title:
                 # Fallback lấy từ URL slug
