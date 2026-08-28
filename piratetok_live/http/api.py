@@ -98,15 +98,45 @@ def check_online(
         with opener.open(req, timeout=timeout) as resp:
             status = resp.status
             body = resp.read().decode("utf-8")
-    except urllib.error.HTTPError as e:
-        if e.code in (403, 429):
-            raise TikTokBlockedError(e.code) from e
-        raise TikTokBlockedError(e.code) from e
-
-    try:
         result: Dict[str, Any] = json.loads(body)
-    except json.JSONDecodeError as e:
-        raise TikTokBlockedError(status) from e
+    except Exception as e:
+
+        # Fallback 1: Trích xuất trực tiếp roomId từ trang Live HTML qua curl_cffi Chrome impersonation
+        try:
+            import re
+            from curl_cffi import requests
+            r_live = requests.get(
+                f"https://www.tiktok.com/@{clean}/live",
+                headers={"User-Agent": ua},
+                impersonate="chrome120",
+                timeout=timeout,
+            )
+            m = re.search(r'"roomId":"(\d{10,})"', r_live.text)
+            if m and m.group(1) != "0":
+                return RoomIdResult(m.group(1))
+        except Exception:
+            pass
+
+        # Fallback 2: Trích xuất qua Headless Chromium
+        try:
+            import re
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                ctx = browser.new_context(user_agent=ua)
+                page = ctx.new_page()
+                page.goto(f"https://www.tiktok.com/@{clean}/live", wait_until="domcontentloaded", timeout=int(timeout * 1000))
+                m = re.search(r'"roomId":"(\d{10,})"', page.content())
+                browser.close()
+                if m and m.group(1) != "0":
+                    return RoomIdResult(m.group(1))
+        except Exception:
+            pass
+
+        if isinstance(e, urllib.error.HTTPError):
+            raise TikTokBlockedError(e.code) from e
+        raise TikTokBlockedError(403) from e
+
 
     status_code = result.get("statusCode", -1)
     if status_code == 19881007:
