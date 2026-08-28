@@ -262,7 +262,16 @@ async def main():
     else:
         master_ttwid = pool_tokens[0]
 
-    # 2. Khám phá Room ID một lần duy nhất dùng chung cho 200 luồng
+    # 2. Hỗ trợ nạp danh sách Proxy (nếu có file proxy_pool.txt hoặc proxies.txt)
+    proxy_list: List[str] = []
+    for p_file in ["proxy_pool.txt", "proxies.txt"]:
+        if os.path.exists(p_file):
+            with open(p_file, "r", encoding="utf-8") as f:
+                proxy_list = [line.strip() for line in f if line.strip()]
+            print(f"[*] Đã nạp thành công {len(proxy_list)} Proxy từ '{p_file}'!")
+            break
+
+    # 3. Khám phá Room ID một lần duy nhất dùng chung cho 200 luồng
     print(f"[*] Đang kiểm tra phòng Live của @{username}...")
     try:
         room_res = TikTokLiveClient.check_online(username)
@@ -283,8 +292,10 @@ async def main():
     for i in range(total_workers):
         w_id = i + 1
         worker_ttwid = pool_tokens[i % len(pool_tokens)] if pool_tokens else master_ttwid
-        tasks.append(asyncio.create_task(run_single_worker(w_id, username, worker_ttwid, room_id, monitor)))
+        worker_proxy = proxy_list[i % len(proxy_list)] if proxy_list else None
+        tasks.append(asyncio.create_task(run_single_worker(w_id, username, worker_ttwid, room_id, monitor, proxy_url=worker_proxy)))
         await asyncio.sleep(ramp_up_delay)
+
 
 
     try:
