@@ -243,25 +243,39 @@ class TikTokEvent(NamedTuple):
         return f"https://shop.tiktok.com/vn/pdp/{pid}" if pid else ""
 
     def canonical_product_info(self, region: str = "vn") -> tuple[str, str]:
-        """Tự động resolve link SEO hoàn chỉnh và trích xuất tên sản phẩm từ URL slug."""
+        """Tự động resolve link SEO hoàn chỉnh và trích xuất tên sản phẩm tiếng Việt đầy đủ."""
         pid = self.product_id
         if not pid:
             return "", ""
         from curl_cffi import requests
-        import urllib.parse
+        import re, urllib.parse
         url = f"https://shop.tiktok.com/{region.lower()}/pdp/{pid}"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
         }
         try:
-            r = requests.get(url, headers=headers, impersonate="chrome120", allow_redirects=False, timeout=4)
-            canonical = r.headers.get("Location") or url
+            r301 = requests.get(url, headers=headers, impersonate="chrome120", allow_redirects=False, timeout=4)
+            canonical = r301.headers.get("Location") or url
+            
+            # Thử lấy tiêu đề tiếng Việt gốc từ HTML H1
+            try:
+                r_html = requests.get(canonical, headers=headers, impersonate="chrome120", timeout=4)
+                h1_m = re.search(r"<h1[^>]*>(.*?)</h1>", r_html.text, re.DOTALL)
+                if h1_m:
+                    full_title = re.sub(r"<[^>]+>", "", h1_m.group(1)).strip()
+                    if full_title:
+                        return canonical, full_title
+            except Exception:
+                pass
+
+            # Fallback lấy từ URL slug
             parsed = urllib.parse.urlparse(canonical)
             parts = [p for p in parsed.path.split("/") if p and p not in (region.lower(), "pdp", pid)]
             title = parts[0].replace("-", " ").title() if parts else ""
             return canonical, title
         except Exception:
             return url, ""
+
 
     @property
     def action_type(self) -> int:
