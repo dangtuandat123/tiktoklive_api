@@ -29,27 +29,37 @@ def get_time_str() -> str:
     return datetime.datetime.now().strftime("%H:%M:%S")
 
 
-def decode_shopping_blob(blob: bytes | str | None) -> dict | str | None:
-    """Giải mã sâu chuỗi nhị phân shopping_data_blob của TikTok Shop."""
+def parse_shopping_blob(blob: bytes | str | None) -> dict:
+    """Trích xuất các thuộc tính nghiệp vụ từ shopping_data_blob."""
+    info = {}
     if not blob:
-        return None
-    if isinstance(blob, (bytes, bytearray)):
-        try:
-            text = blob.decode("utf-8", errors="ignore")
-            # Nếu chứa JSON cấu trúc
-            if "{" in text and "}" in text:
-                # Tìm đoạn JSON hợp lệ
-                start = text.find("{")
-                end = text.rfind("}") + 1
-                return json.loads(text[start:end])
-            return text
-        except Exception:
-            return repr(blob)
-    return blob
+        return info
+    
+    raw_bytes = blob if isinstance(blob, (bytes, bytearray)) else str(blob).encode("utf-8", errors="ignore")
+    
+    # Tìm các chuỗi khóa - giá trị
+    try:
+        text = raw_bytes.decode("utf-8", errors="ignore")
+        if "CardTypePopProduct" in text:
+            info["card_type"] = "Thẻ Pop-up Sản Phẩm Nổi Bật (CardTypePopProduct)"
+        if "SetPinProduct" in text:
+            info["action"] = "Streamer vừa bấm GHIM SẢN PHẨM (SetPinProduct)"
+        if "LiveManager" in text:
+            info["platform"] = "Thao tác từ Trình quản lý TikTok Live Studio"
+        
+        # Nếu có chuỗi JSON
+        if "{" in text and "}" in text:
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            json_data = json.loads(text[start:end])
+            info["json_details"] = json_data
+    except Exception:
+        pass
+        
+    return info
 
 
 async def main():
-
     # Tên kênh streamer bán hàng mục tiêu
     username = "swatchesbybaobao"
     
@@ -72,7 +82,7 @@ async def main():
     def on_connected(evt):
         print("\n" + "=" * 85, flush=True)
         print(f"[{get_time_str()}] [🛒 TIKTOK SHOP TRACKER] ĐÃ KẾT NỐI VÀO PHÒNG LIVE: @{username}", flush=True)
-        print(f"[{get_time_str()}] [*] Room ID: {evt.room_id} | Đang chờ các sự kiện giỏ hàng và đơn hàng...", flush=True)
+        print(f"[{get_time_str()}] [*] Room ID: {evt.room_id} | Đang theo dõi các sự kiện Giỏ hàng & Ghim sản phẩm...", flush=True)
         print("=" * 85 + "\n", flush=True)
 
     # ============================================================
@@ -81,35 +91,22 @@ async def main():
     @client.on(EventType.oec_live_shopping)
     def on_oec_shopping(evt):
         data = evt.data or {}
-        blob = data.get("shopping_data_blob") or data.get("shoppingDataBlob")
-        decoded = decode_shopping_blob(blob)
+        action_type = data.get("actionType") or data.get("action_type") or 1
+        blob = data.get("shoppingDataBlob") or data.get("shopping_data_blob")
+        parsed = parse_shopping_blob(blob)
 
-        print("\n" + "🔥" * 40, flush=True)
-        print(f"[{get_time_str()}] [🛍️ TIKTOK SHOP - CẬP NHẬT GIỎ HÀNG / GHIM SẢN PHẨM MỚI!]", flush=True)
+        print("\n" + "🔥" * 45, flush=True)
+        print(f"[{get_time_str()}] [🛍️ TIKTOK SHOP - PHÁT HIỆN SỰ KIỆN GIỎ HÀNG / GHIM SẢN PHẨM!]", flush=True)
+        print(f"  📌 Hành động: {parsed.get('action', 'Cập nhật ghim sản phẩm mới')}", flush=True)
+        print(f"  🏷️ Loại hiển thị: {parsed.get('card_type', 'Thẻ sản phẩm')}", flush=True)
+        print(f"  💻 Nền tảng: {parsed.get('platform', 'TikTok Live Studio')}", flush=True)
+        print(f"  🔢 Action Type Code: {action_type}", flush=True)
         
-        if isinstance(decoded, dict):
-            # Trích xuất các trường thông tin nếu có
-            title = decoded.get("title") or decoded.get("product_title") or decoded.get("name")
-            price = decoded.get("price") or decoded.get("format_price")
-            product_id = decoded.get("product_id") or decoded.get("id")
-            stock = decoded.get("stock") or decoded.get("stock_count")
+        if "json_details" in parsed:
+            print(f"  📄 Chi tiết: {json.dumps(parsed['json_details'], ensure_ascii=False, indent=2)}", flush=True)
             
-            if title:
-                print(f"  📌 Tên sản phẩm: {title}", flush=True)
-            if price:
-                print(f"  💰 Giá bán: {price}", flush=True)
-            if product_id:
-                print(f"  🆔 Mã sản phẩm (Product ID): {product_id}", flush=True)
-            if stock:
-                print(f"  📦 Tồn kho: {stock}", flush=True)
-            
-            print(f"  📄 Raw Data: {json.dumps(decoded, ensure_ascii=False)}", flush=True)
-        elif decoded:
-            print(f"  📄 Nội dung: {decoded}", flush=True)
-        else:
-            print(f"  📄 Gói tin nhị phân: {data}", flush=True)
-            
-        print("🔥" * 40 + "\n", flush=True)
+        print("🔥" * 45 + "\n", flush=True)
+
 
     # ============================================================
     # 3. SỰ KIỆN GHIM TIN NHẮN / GHIM DEAL TRÊN KHUNG CHAT

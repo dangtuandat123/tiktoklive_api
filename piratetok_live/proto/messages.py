@@ -281,7 +281,10 @@ class RoomVerifyMessage(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class WebcastOecLiveShoppingMessage(betterproto.Message):
     common: "Common" = betterproto.message_field(1)
-    shopping_data_blob: bytes = betterproto.bytes_field(2)
+    action_type: int = betterproto.int64_field(2)
+    product_id_raw: bytes = betterproto.bytes_field(4)
+    shopping_data_blob: bytes = betterproto.bytes_field(5)
+
 
 
 @dataclass(eq=False, repr=False)
