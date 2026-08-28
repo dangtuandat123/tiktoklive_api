@@ -171,9 +171,10 @@ async def main():
         data = evt.data or {}
         user = data.get("user") or {}
         nick = user.get("nickname") or "Khán giả"
-        total_member = data.get("member_count") or 0
+        total_member = int(data.get("member_count") or data.get("memberCount") or 0)
         badge = format_user_badge(data)
-        print(f"[{get_time_str()}] [🚪 VÀO PHÒNG] {badge}{nick} vừa vào xem (Số người xem: {total_member:,})", flush=True)
+        member_str = f" (Số người xem: {total_member:,})" if total_member > 0 else ""
+        print(f"[{get_time_str()}] [🚪 VÀO PHÒNG] {badge}{nick} vừa vào xem{member_str}", flush=True)
 
     @client.on(EventType.follow)
     def on_follow(evt):
@@ -187,7 +188,7 @@ async def main():
         data = evt.data or {}
         user = data.get("user") or {}
         nick = user.get("nickname") or "Khán giả"
-        share_target = data.get("share_target") or "bạn bè"
+        share_target = data.get("share_target") or data.get("shareTarget") or "bạn bè"
         print(f"[{get_time_str()}] [🔗 SHARE] {nick} đã CHIA SẺ livestream tới {share_target}!", flush=True)
 
     # ============================================================
@@ -196,17 +197,18 @@ async def main():
     @client.on(EventType.room_user_seq)
     def on_user_seq(evt):
         data = evt.data or {}
-        viewers = data.get("viewer_count") or 0
-        total_user = data.get("total_user") or 0
-        ranks = data.get("ranks_list") or []
+        viewers = int(data.get("viewer_count") or data.get("viewerCount") or 0)
+        total_user = int(data.get("total_user") or data.get("totalUser") or 0)
+        ranks = data.get("ranks_list") or data.get("ranksList") or []
         top1 = ""
         if ranks and len(ranks) > 0:
             top_user = ranks[0].get("user") or {}
             top_nick = top_user.get("nickname") or "Ẩn danh"
-            top_score = ranks[0].get("score") or 0
+            top_score = int(ranks[0].get("score") or 0)
             top1 = f" | 🥇 Top 1 BXH: {top_nick} ({top_score:,} điểm)"
 
         print(f"[{get_time_str()}] [📊 THỐNG KÊ] Đang xem: {viewers:,} người | Tổng lượt ghé: {total_user:,}{top1}", flush=True)
+
 
     # ============================================================
     # 7. SỰ KIỆN TIKTOK SHOP / THƯƠNG MẠI ĐIỆN TỬ
