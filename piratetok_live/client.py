@@ -25,10 +25,12 @@ class TikTokLiveClient:
         self._user_agent: Optional[str] = None
         self._cookies: Optional[str] = None
         self._compress = True
+        self._history_comment_count = 20
         self._language: Optional[str] = None
         self._region: Optional[str] = None
         self._stop: Optional[asyncio.Event] = None
         self._listeners: Dict[str, List[Callable]] = {}
+
 
     def cdn_eu(self) -> "TikTokLiveClient":
         self._cdn_host = "webcast-ws.eu.tiktok.com"
@@ -88,6 +90,12 @@ class TikTokLiveClient:
         """
         self._compress = enabled
         return self
+
+    def history_comment_count(self, count: int) -> "TikTokLiveClient":
+        """Set how many previous history comments to prefetch on connect (e.g. 0, 20, 50)."""
+        self._history_comment_count = max(0, count)
+        return self
+
 
 
     def _extract_ttwid(self) -> Optional[str]:
@@ -151,7 +159,9 @@ class TikTokLiveClient:
             wss_url = build_wss_url(
                 self._cdn_host, room.room_id, lang, reg,
                 compress=self._compress,
+                history_comment_count=self._history_comment_count,
             )
+
 
             is_device_blocked = False
             try:

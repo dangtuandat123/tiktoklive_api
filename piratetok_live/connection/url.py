@@ -10,6 +10,7 @@ def build_wss_url(
     language: str = "en",
     region: str = "US",
     compress: bool = True,
+    history_comment_count: int = 20,
 ) -> str:
     last_rtt = f"{100 + random.random() * 100:.3f}"
     tz = system_timezone()
@@ -39,7 +40,8 @@ def build_wss_url(
         "client_enter": "1",
         "room_id": room_id,
         "identity": "audience",
-        "history_comment_count": "6",
+        "history_comment_count": str(history_comment_count),
+
         "last_rtt": last_rtt,
         "heartbeat_duration": "10000",
         "resp_content_type": "protobuf",
