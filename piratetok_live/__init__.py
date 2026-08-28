@@ -3,7 +3,9 @@ from .events.types import EventType, TikTokEvent
 from .http.api import RoomIdResult, RoomInfo, StreamUrls, check_online, fetch_room_info
 from .helpers.profile_cache import ProfileCache
 from .http.sigi import SigiProfile
+from .http.shop_resolver import TikTokShopResolver
 from .auth.playwright_ttwid import PlaywrightTTWIDGenerator, get_ttwid, get_ttwid_async
+
 from .helpers import GiftStreakTracker, GiftStreakEvent, LikeAccumulator, LikeStats
 
 from .errors import (
