@@ -197,7 +197,7 @@ class TikTokLiveClient:
                         raise RuntimeError(f"Không thể lấy cookie ttwid (cffi: {cffi_err} | playwright: {pw_err})") from pw_err
 
             wss_url = build_wss_url(
-                self._cdn_host, room.room_id, lang, reg,
+                self._cdn_host, self._room_id, lang, reg,
                 compress=self._compress,
                 history_comment_count=self._history_comment_count,
             )
@@ -205,7 +205,7 @@ class TikTokLiveClient:
             is_device_blocked = False
             try:
                 await connect_wss(
-                    wss_url, ttwid, room.room_id,
+                    wss_url, ttwid, self._room_id,
                     on_event=self._emit,
                     on_error=lambda e: self._emit(TikTokEvent("error", e)),
                     stop_event=self._stop,
@@ -224,7 +224,6 @@ class TikTokLiveClient:
                 except Exception:
                     pass
 
-
             if self._stop.is_set():
                 break
 
@@ -242,13 +241,14 @@ class TikTokLiveClient:
             self._emit(TikTokEvent(
                 EventType.reconnecting,
                 {"attempt": attempt, "max_retries": self._max_retries, "delay": delay},
-                room.room_id,
+                self._room_id,
             ))
             _log.info("reconnecting in %ds (attempt %d/%d)", delay, attempt, self._max_retries)
             await asyncio.sleep(delay)
 
-        self._emit(TikTokEvent(EventType.disconnected, None, room.room_id))
-        return room.room_id
+        self._emit(TikTokEvent(EventType.disconnected, None, self._room_id))
+        return self._room_id
+
 
     def run(self) -> str:
         """Blocking connect — runs the asyncio event loop."""
