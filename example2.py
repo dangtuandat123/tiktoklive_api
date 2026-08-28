@@ -10,10 +10,13 @@ Kịch bản này được tối ưu 100% cho mảng Bán hàng / TikTok Shop:
 from __future__ import annotations
 
 import asyncio
+import base64
 import datetime
+import io
 import json
 import re
 import sys
+
 
 # Đảm bảo hiển thị Tiếng Việt và Emoji chuẩn trên Windows
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
@@ -29,25 +32,76 @@ def get_time_str() -> str:
     return datetime.datetime.now().strftime("%H:%M:%S")
 
 
+def extract_product_id(raw_field) -> str | None:
+    """Bóc tách Product ID (Mã định danh sản phẩm) từ chuỗi nhị phân."""
+    if not raw_field:
+        return None
+    try:
+        raw_bytes = base64.b64decode(raw_field) if isinstance(raw_field, str) else raw_field
+    except Exception:
+        raw_bytes = raw_field if isinstance(raw_field, (bytes, bytearray)) else b""
+    
+    if not raw_bytes:
+        return None
+
+    # Giải mã tuần tự các trường Protobuf Varint
+    def decode_varint(stream):
+        res, shift = 0, 0
+        while True:
+            b = stream.read(1)
+            if not b:
+                return None
+            byte = b[0]
+            res |= (byte & 0x7F) << shift
+            if not (byte & 0x80):
+                break
+            shift += 7
+        return res
+
+    try:
+        stream = io.BytesIO(raw_bytes)
+        while True:
+            tag = decode_varint(stream)
+            if tag is None:
+                break
+            wire_type = tag & 0x07
+            if wire_type == 0:
+                val = decode_varint(stream)
+                if val and val > 1000000000:
+                    return str(val)
+            elif wire_type == 2:
+                l = decode_varint(stream)
+                stream.read(l)
+            elif wire_type == 1:
+                stream.read(8)
+            elif wire_type == 5:
+                stream.read(4)
+    except Exception:
+        pass
+    return None
+
+
 def parse_shopping_blob(blob: bytes | str | None) -> dict:
     """Trích xuất các thuộc tính nghiệp vụ từ shopping_data_blob."""
     info = {}
     if not blob:
         return info
     
-    raw_bytes = blob if isinstance(blob, (bytes, bytearray)) else str(blob).encode("utf-8", errors="ignore")
+    try:
+        raw_bytes = base64.b64decode(blob) if isinstance(blob, str) else blob
+    except Exception:
+        raw_bytes = blob if isinstance(blob, (bytes, bytearray)) else str(blob).encode("utf-8", errors="ignore")
     
-    # Tìm các chuỗi khóa - giá trị
     try:
         text = raw_bytes.decode("utf-8", errors="ignore")
         if "CardTypePopProduct" in text:
             info["card_type"] = "Thẻ Pop-up Sản Phẩm Nổi Bật (CardTypePopProduct)"
         if "SetPinProduct" in text:
-            info["action"] = "Streamer vừa bấm GHIM SẢN PHẨM (SetPinProduct)"
+            info["action"] = "Streamer vừa bấm GHIM SẢN PHẨM LÊN MÀN HÌNH (SetPinProduct)"
         if "LiveManager" in text:
             info["platform"] = "Thao tác từ Trình quản lý TikTok Live Studio"
         
-        # Nếu có chuỗi JSON
+        # Nếu có chuỗi JSON lồng
         if "{" in text and "}" in text:
             start = text.find("{")
             end = text.rfind("}") + 1
@@ -92,20 +146,32 @@ async def main():
     def on_oec_shopping(evt):
         data = evt.data or {}
         action_type = data.get("actionType") or data.get("action_type") or 1
+        
+        # Bóc tách Product ID
+        product_id_field = data.get("productIdRaw") or data.get("product_id_raw")
+        product_id = extract_product_id(product_id_field)
+        
+        # Bóc tách Shopping Data Blob
         blob = data.get("shoppingDataBlob") or data.get("shopping_data_blob")
         parsed = parse_shopping_blob(blob)
 
         print("\n" + "🔥" * 45, flush=True)
         print(f"[{get_time_str()}] [🛍️ TIKTOK SHOP - PHÁT HIỆN SỰ KIỆN GIỎ HÀNG / GHIM SẢN PHẨM!]", flush=True)
-        print(f"  📌 Hành động: {parsed.get('action', 'Cập nhật ghim sản phẩm mới')}", flush=True)
-        print(f"  🏷️ Loại hiển thị: {parsed.get('card_type', 'Thẻ sản phẩm')}", flush=True)
-        print(f"  💻 Nền tảng: {parsed.get('platform', 'TikTok Live Studio')}", flush=True)
-        print(f"  🔢 Action Type Code: {action_type}", flush=True)
+        print(f"  📌 Hành động: {parsed.get('action', 'Streamer vừa bấm GHIM SẢN PHẨM (SetPinProduct)')}", flush=True)
+        
+        if product_id:
+            print(f"  🆔 Mã Sản Phẩm (Product ID): {product_id}", flush=True)
+            print(f"  🔗 Link Mua Hàng TikTok Shop: https://www.tiktok.com/view/product/{product_id}", flush=True)
+            
+        print(f"  🏷️ Loại hiển thị: {parsed.get('card_type', 'Thẻ Pop-up Sản Phẩm Nổi Bật (CardTypePopProduct)')}", flush=True)
+        print(f"  💻 Nền tảng: {parsed.get('platform', 'TikTok Live Studio (ActionPlatform_LiveManager)')}", flush=True)
+        print(f"  🔢 Action Code: {action_type}", flush=True)
         
         if "json_details" in parsed:
             print(f"  📄 Chi tiết: {json.dumps(parsed['json_details'], ensure_ascii=False, indent=2)}", flush=True)
             
         print("🔥" * 45 + "\n", flush=True)
+
 
 
     # ============================================================
