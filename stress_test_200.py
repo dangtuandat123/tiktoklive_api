@@ -244,14 +244,23 @@ async def main():
     print(f"🔍 Cơ chế nhận diện: Định danh Worker ID, Bắt mã lỗi (415, 429, 403) và Nhật ký thời gian thực")
     print("=" * 95)
 
-    # 1. Cấp token TTWID xác thực chuẩn
-    print(f"[*] Đang chuẩn bị token TTWID xác thực an toàn qua Playwright...")
-    try:
-        ttwid = get_ttwid(username)
-        print(f"[+] Đã cấp TTWID thành công: {ttwid[:20]}...")
-    except Exception as e:
-        print(f"[!] Cảnh báo lấy TTWID: {e}, sẽ để client tự sinh token.")
-        ttwid = ""
+    # 1. Cấp token TTWID xác thực chuẩn (Hỗ trợ nạp 200 token riêng biệt từ pool nếu có)
+    pool_tokens: List[str] = []
+    if os.path.exists("ttwid_pool.txt"):
+        with open("ttwid_pool.txt", "r", encoding="utf-8") as f:
+            pool_tokens = [line.strip() for line in f if line.strip()]
+        print(f"[*] Đã nạp thành công {len(pool_tokens)} token TTWID riêng biệt từ 'ttwid_pool.txt'!")
+
+    if not pool_tokens:
+        print(f"[*] Đang chuẩn bị token TTWID xác thực an toàn qua Playwright (Master Token)...")
+        try:
+            master_ttwid = get_ttwid(username)
+            print(f"[+] Đã cấp Master TTWID thành công: {master_ttwid[:20]}...")
+        except Exception as e:
+            print(f"[!] Cảnh báo lấy TTWID: {e}, sẽ để client tự sinh token.")
+            master_ttwid = ""
+    else:
+        master_ttwid = pool_tokens[0]
 
     # 2. Khám phá Room ID một lần duy nhất dùng chung cho 200 luồng
     print(f"[*] Đang kiểm tra phòng Live của @{username}...")
@@ -273,8 +282,10 @@ async def main():
     tasks = []
     for i in range(total_workers):
         w_id = i + 1
-        tasks.append(asyncio.create_task(run_single_worker(w_id, username, ttwid, room_id, monitor)))
+        worker_ttwid = pool_tokens[i % len(pool_tokens)] if pool_tokens else master_ttwid
+        tasks.append(asyncio.create_task(run_single_worker(w_id, username, worker_ttwid, room_id, monitor)))
         await asyncio.sleep(ramp_up_delay)
+
 
     try:
         await asyncio.gather(*tasks, return_exceptions=True)
