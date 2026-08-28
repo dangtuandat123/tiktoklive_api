@@ -37,7 +37,7 @@ async def main():
     def on_connected(evt):
         print(f"\n[🚀 Connected] Kết nối thành công tới phòng Live ID: {evt.room_id}", flush=True)
 
-    # Đăng ký nhận sự kiện Bình luận (Chat)
+    # 1. Đăng ký nhận sự kiện Bình luận chữ (Chat)
     @client.on(EventType.chat)
     def on_chat(evt):
         data = evt.data or {}
@@ -46,7 +46,22 @@ async def main():
         comment = data.get("content") or data.get("comment") or ""
         print(f"[💬 Chat] {nick}: {comment}", flush=True)
 
-    # Đăng ký nhận sự kiện Tặng Quà (Gift)
+    # 2. Đăng ký nhận sự kiện Emote / Sticker Chat
+    @client.on(EventType.emote_chat)
+    def on_emote(evt):
+        data = evt.data or {}
+        user = data.get("user") or {}
+        nick = user.get("nickname") or "Ẩn danh"
+        print(f"[😀 Emote] {nick} đã gửi sticker/emote!", flush=True)
+
+    # 3. Đăng ký nhận sự kiện Tin nhắn phòng / Host / Hệ thống
+    @client.on(EventType.room_message)
+    def on_room_msg(evt):
+        data = evt.data or {}
+        content = data.get("content") or ""
+        print(f"[📢 Phòng/Host] {content}", flush=True)
+
+    # 4. Đăng ký nhận sự kiện Tặng Quà (Gift)
     @client.on(EventType.gift)
     def on_gift(evt):
         data = evt.data or {}
@@ -57,6 +72,7 @@ async def main():
         count = data.get("repeat_count") or data.get("repeatCount") or 1
         diamonds = evt.data.get("diamond_total") or gift.get("diamondCount", 0)
         print(f"[🎁 Gift] {nick} tặng {gift_name} x{count} ({diamonds} xu)", flush=True)
+
 
     # Đăng ký nhận sự kiện Thả Tim (Like)
     @client.on(EventType.like)
