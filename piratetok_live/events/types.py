@@ -1,4 +1,6 @@
-from typing import Any, NamedTuple
+from dataclasses import dataclass, field
+from typing import Any, List, NamedTuple
+
 
 
 class EventType:
@@ -89,8 +91,23 @@ class EventType:
     live_game_intro = "live_game_intro"
 
 
+@dataclass
+class ProductInfo:
+    """Thông tin chi tiết của sản phẩm TikTok Shop."""
+    product_id: str = ""
+    title: str = ""
+    url: str = ""
+    image: str = ""
+    images: List[str] = field(default_factory=list)
+
+    def __iter__(self):
+        # Hỗ trợ unpack tuple tự nhiên: url, title = evt.canonical_product_info()
+        return iter((self.url, self.title))
+
+
 class TikTokEvent(NamedTuple):
     type: str
+
     data: Any
     room_id: str = ""
 
@@ -242,13 +259,14 @@ class TikTokEvent(NamedTuple):
         pid = self.product_id
         return f"https://shop.tiktok.com/vn/pdp/{pid}" if pid else ""
 
-    def canonical_product_info(self, region: str = "vn") -> tuple[str, str]:
-        """Tự động resolve link SEO hoàn chỉnh và trích xuất tên sản phẩm tiếng Việt đầy đủ."""
+
+    def canonical_product_info(self, region: str = "vn") -> ProductInfo:
+        """Tự động resolve link SEO hoàn chỉnh, trích xuất tên sản phẩm tiếng Việt và hình ảnh cover HD."""
         pid = self.product_id
         if not pid:
-            return "", ""
+            return ProductInfo()
         from curl_cffi import requests
-        import re, urllib.parse
+        import html as html_lib, re, urllib.parse
         url = f"https://shop.tiktok.com/{region.lower()}/pdp/{pid}"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
@@ -257,24 +275,45 @@ class TikTokEvent(NamedTuple):
             r301 = requests.get(url, headers=headers, impersonate="chrome120", allow_redirects=False, timeout=4)
             canonical = r301.headers.get("Location") or url
             
-            # Thử lấy tiêu đề tiếng Việt gốc từ HTML H1
+            full_title = ""
+            main_image = ""
+            images_list: List[str] = []
+
+            # Thử lấy tiêu đề tiếng Việt gốc và danh sách ảnh từ HTML
             try:
                 r_html = requests.get(canonical, headers=headers, impersonate="chrome120", timeout=4)
-                h1_m = re.search(r"<h1[^>]*>(.*?)</h1>", r_html.text, re.DOTALL)
+                raw_html = r_html.text
+                
+                h1_m = re.search(r"<h1[^>]*>(.*?)</h1>", raw_html, re.DOTALL)
                 if h1_m:
                     full_title = re.sub(r"<[^>]+>", "", h1_m.group(1)).strip()
-                    if full_title:
-                        return canonical, full_title
+                    
+                # Bóc tách ảnh sản phẩm
+                raw_imgs = set(re.findall(r'https://[^"\'\s<>\\]*ibyteimg\.com/[^"\'\s<>\\]+', raw_html))
+                origin_imgs = [html_lib.unescape(i) for i in raw_imgs if "origin-image" in i]
+                resize_imgs = [html_lib.unescape(i) for i in raw_imgs if "resize-webp" in i or "crop-webp" in i]
+                images_list = origin_imgs + resize_imgs
+                if images_list:
+                    main_image = images_list[0]
             except Exception:
                 pass
 
-            # Fallback lấy từ URL slug
-            parsed = urllib.parse.urlparse(canonical)
-            parts = [p for p in parsed.path.split("/") if p and p not in (region.lower(), "pdp", pid)]
-            title = parts[0].replace("-", " ").title() if parts else ""
-            return canonical, title
+            if not full_title:
+                # Fallback lấy từ URL slug
+                parsed = urllib.parse.urlparse(canonical)
+                parts = [p for p in parsed.path.split("/") if p and p not in (region.lower(), "pdp", pid)]
+                full_title = parts[0].replace("-", " ").title() if parts else ""
+                
+            return ProductInfo(
+                product_id=pid,
+                title=full_title,
+                url=canonical,
+                image=main_image,
+                images=images_list
+            )
         except Exception:
-            return url, ""
+            return ProductInfo(product_id=pid, url=url)
+
 
 
     @property

@@ -160,10 +160,11 @@ async def main():
             
         product_id = active_product_id
         
-        # Tự động resolve Link SEO không bị Captcha và Tên sản phẩm
-        canonical_link, product_title = evt.canonical_product_info(region="vn")
-        if not canonical_link and product_id:
-            canonical_link = f"https://shop.tiktok.com/vn/pdp/{product_id}"
+        # Tự động resolve Link SEO không bị Captcha, Tên sản phẩm và Ảnh đại diện
+        info = evt.canonical_product_info(region="vn")
+        canonical_link = info.url or (f"https://shop.tiktok.com/vn/pdp/{product_id}" if product_id else "")
+        product_title = info.title
+        product_image = info.image
 
         # Bóc tách Shopping Data Blob
         blob = data.get("shoppingDataBlob") or data.get("shopping_data_blob")
@@ -177,8 +178,11 @@ async def main():
             print(f"  📦 Tên Sản Phẩm: {product_title}", flush=True)
         if product_id:
             print(f"  🆔 Mã Sản Phẩm (Product ID): {product_id}", flush=True)
+        if product_image:
+            print(f"  🖼️ Ảnh Sản Phẩm (HD): {product_image}", flush=True)
         if canonical_link:
             print(f"  🔗 Link Mua Hàng TikTok Shop (Không Captcha): {canonical_link}", flush=True)
+
             
         print(f"  🏷️ Loại hiển thị: {parsed.get('card_type', 'Thẻ Pop-up Sản Phẩm Nổi Bật (CardTypePopProduct)')}", flush=True)
         print(f"  💻 Nền tảng: {parsed.get('platform', 'TikTok Live Studio (ActionPlatform_LiveManager)')}", flush=True)
