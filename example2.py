@@ -144,22 +144,10 @@ async def main():
     def on_goal(evt):
         print(f"[{get_time_str()}] [🎯 MỤC TIÊU BÁN HÀNG] Tiến độ chỉ tiêu live vừa được cập nhật!", flush=True)
 
-    # ============================================================
-    # 6. BỘ LỌC ĐƠN HÀNG & BÌNH LUẬN MUA SẮM THỜI GIAN THỰC
-    # ============================================================
-    @client.on(EventType.chat)
-    def on_chat(evt):
-        comment = evt.comment or ""
-        nick = evt.user_nickname or "Khách hàng"
-        uid = evt.user_id or ""
-
-        # Lọc ra các bình luận có ý định mua sắm hoặc xác nhận chốt đơn
-        if BUYING_REGEX.search(comment):
-            print(f"[{get_time_str()}] [📦 ĐƠN HÀNG / MUA SẮM] {nick} (id:{uid}): {comment}", flush=True)
-
     # Bắt đầu kết nối
     print(f"[{get_time_str()}] [*] Đang kết nối tới TikTok Live @{username} để theo dõi Shop...", flush=True)
     await client.connect()
+
 
 
 if __name__ == "__main__":
