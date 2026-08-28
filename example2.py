@@ -183,9 +183,12 @@ async def main():
         if info.sold_count:
             print(f"  📈 Lượt Bán: {info.sold_count}", flush=True)
         if product_image:
-            print(f"  🖼️ Ảnh Đại Diện (Thumbnail #1 HD): {product_image}", flush=True)
+            print(f"  🖼️ Ảnh Đại Diện (Thumbnail #1 HD):", flush=True)
+            print(f"     {product_image}", flush=True)
         if canonical_link:
-            print(f"  🔗 Link Mua Hàng TikTok Shop (Không Captcha): {canonical_link}", flush=True)
+            print(f"  🔗 Link Mua Hàng TikTok Shop (Không Captcha):", flush=True)
+            print(f"     {canonical_link}", flush=True)
+
 
 
             
