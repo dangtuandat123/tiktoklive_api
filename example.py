@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import json
 import sys
 
 # Đảm bảo in tiếng Việt & Emoji trên Windows không bị lỗi bảng mã
@@ -11,6 +12,8 @@ if sys.stderr and hasattr(sys.stderr, "reconfigure"):
 from piratetok_live import (
     TikTokLiveClient,
     EventType,
+    TikTokEvent,
+    ProductInfo,
     GiftStreakTracker,
     LikeAccumulator,
     get_ttwid,
@@ -22,23 +25,18 @@ def get_time_str() -> str:
     return datetime.datetime.now().strftime("%H:%M:%S")
 
 
-def format_user_badge(data: dict) -> str:
+def format_user_badge(evt: TikTokEvent) -> str:
     """Trích xuất danh xưng / huy hiệu của người dùng (Host, Mod, Sub, Fan)."""
-    user = data.get("user") or {}
-    user_identity = data.get("user_identity") or {}
-    fans_club = user.get("fans_club") or {}
-    fans_data = fans_club.get("data") or {}
-
     badges = []
-    if user_identity.get("is_anchor"):
+    if evt.is_host:
         badges.append("👑 HOST")
-    elif user_identity.get("is_moderator_of_anchor") or user.get("user_attr", {}).get("is_admin"):
+    elif evt.is_mod:
         badges.append("🛡️ MOD")
-    if user_identity.get("is_subscriber_of_anchor"):
+    if evt.is_sub:
         badges.append("⭐ SUB")
-    if fans_data.get("club_name"):
-        club_name = fans_data.get("club_name")
-        level = fans_data.get("level", 1)
+    if evt.is_fan:
+        club_name = evt.fans_club_name or "Fan"
+        level = evt.fans_club_level or 1
         badges.append(f"🎖️ {club_name} Lv.{level}")
 
     badge_str = f"[{' | '.join(badges)}] " if badges else ""
@@ -56,6 +54,7 @@ async def main():
     # Khởi tạo các helper tính toán dữ liệu chuẩn xác
     streak_tracker = GiftStreakTracker()
     like_acc = LikeAccumulator()
+    active_product_id: str = ""
 
     # ============================================================
     # TỰ ĐỘNG CẤP COOKIE TTWID (Bypass anti-bot 100% bằng Playwright)
@@ -73,7 +72,7 @@ async def main():
     @client.on(EventType.connected)
     def on_connected(evt):
         print(f"\n[{get_time_str()}] [🚀 CONNECTED] Kết nối thành công tới phòng Live ID: {evt.room_id}", flush=True)
-        print("=" * 80, flush=True)
+        print("=" * 85, flush=True)
 
     @client.on(EventType.disconnected)
     def on_disconnected(evt):
@@ -93,21 +92,16 @@ async def main():
     # ============================================================
     @client.on(EventType.chat)
     def on_chat(evt):
-        data = evt.data or {}
-        user = data.get("user") or {}
-        nick = user.get("nickname") or user.get("unique_id") or "Ẩn danh"
-        uid = user.get("id") or ""
-        comment = data.get("content") or data.get("comment") or ""
-        badge = format_user_badge(data)
-        
+        nick = evt.user_nickname or "Ẩn danh"
+        uid = evt.user.get("id") or ""
+        comment = evt.comment
+        badge = format_user_badge(evt)
         print(f"[{get_time_str()}] [💬 CHAT] {badge}{nick} (id:{uid}): {comment}", flush=True)
 
     @client.on(EventType.emote_chat)
     def on_emote(evt):
-        data = evt.data or {}
-        user = data.get("user") or {}
-        nick = user.get("nickname") or "Ẩn danh"
-        badge = format_user_badge(data)
+        nick = evt.user_nickname or "Ẩn danh"
+        badge = format_user_badge(evt)
         print(f"[{get_time_str()}] [😀 EMOTE] {badge}{nick} đã gửi sticker cảm xúc", flush=True)
 
     @client.on(EventType.room_message)
@@ -118,7 +112,10 @@ async def main():
 
     @client.on(EventType.room_pin)
     def on_room_pin(evt):
-        print(f"[{get_time_str()}] [📌 GHIM TIN NHẮN] Có tin nhắn vừa được ghim lên đầu phòng live!", flush=True)
+        data = evt.data or {}
+        print(f"\n[{get_time_str()}] [📌 GHIM DEAL / THÔNG BÁO SHOP] Streamer vừa ghim thông báo mới lên đầu phòng!", flush=True)
+        if data:
+            print(f"    Chi tiết: {data}", flush=True)
 
     # ============================================================
     # 3. SỰ KIỆN TẶNG QUÀ (GIFT & COMBO STREAK TRACKING)
@@ -126,12 +123,11 @@ async def main():
     @client.on(EventType.gift)
     def on_gift(evt):
         data = evt.data or {}
-        user = data.get("user") or {}
-        nick = user.get("nickname") or "Ẩn danh"
+        nick = evt.user_nickname or "Ẩn danh"
         gift = data.get("gift") or {}
-        gift_name = gift.get("name") or "Quà"
+        gift_name = evt.gift_name or "Quà"
         diamond_unit = gift.get("diamond_count") or 0
-        badge = format_user_badge(data)
+        badge = format_user_badge(evt)
 
         # Xử lý tính toán chuỗi combo quà tặng chính xác qua helper
         streak = streak_tracker.process(data)
@@ -152,8 +148,7 @@ async def main():
     @client.on(EventType.like)
     def on_like(evt):
         data = evt.data or {}
-        user = data.get("user") or {}
-        nick = user.get("nickname") or "Khán giả"
+        nick = evt.user_nickname or "Khán giả"
         
         # Ổn định hóa số like không bị nhảy lùi giữa các server shard
         stats = like_acc.process(data)
@@ -169,25 +164,21 @@ async def main():
     @client.on(EventType.join)
     def on_join(evt):
         data = evt.data or {}
-        user = data.get("user") or {}
-        nick = user.get("nickname") or "Khán giả"
+        nick = evt.user_nickname or "Khán giả"
         total_member = int(data.get("member_count") or data.get("memberCount") or 0)
-        badge = format_user_badge(data)
+        badge = format_user_badge(evt)
         member_str = f" (Số người xem: {total_member:,})" if total_member > 0 else ""
         print(f"[{get_time_str()}] [🚪 VÀO PHÒNG] {badge}{nick} vừa vào xem{member_str}", flush=True)
 
     @client.on(EventType.follow)
     def on_follow(evt):
-        data = evt.data or {}
-        user = data.get("user") or {}
-        nick = user.get("nickname") or "Khán giả"
+        nick = evt.user_nickname or "Khán giả"
         print(f"[{get_time_str()}] [➕ FOLLOW] {nick} đã bấm THEO DÕI streamer!", flush=True)
 
     @client.on(EventType.share)
     def on_share(evt):
         data = evt.data or {}
-        user = data.get("user") or {}
-        nick = user.get("nickname") or "Khán giả"
+        nick = evt.user_nickname or "Khán giả"
         share_target = data.get("share_target") or data.get("shareTarget") or "bạn bè"
         print(f"[{get_time_str()}] [🔗 SHARE] {nick} đã CHIA SẺ livestream tới {share_target}!", flush=True)
 
@@ -197,8 +188,8 @@ async def main():
     @client.on(EventType.room_user_seq)
     def on_user_seq(evt):
         data = evt.data or {}
-        viewers = int(data.get("viewer_count") or data.get("viewerCount") or 0)
-        total_user = int(data.get("total_user") or data.get("totalUser") or 0)
+        viewers = evt.viewer_count
+        total_user = evt.total_users
         ranks = data.get("ranks_list") or data.get("ranksList") or []
         top1 = ""
         if ranks and len(ranks) > 0:
@@ -209,25 +200,49 @@ async def main():
 
         print(f"[{get_time_str()}] [📊 THỐNG KÊ] Đang xem: {viewers:,} người | Tổng lượt ghé: {total_user:,}{top1}", flush=True)
 
-
     # ============================================================
-    # 7. SỰ KIỆN TIKTOK SHOP / THƯƠNG MẠI ĐIỆN TỬ
+    # 7. SỰ KIỆN TIKTOK SHOP / THƯƠNG MẠI ĐIỆN TỬ (OEC LIVE SHOPPING)
     # ============================================================
     @client.on(EventType.oec_live_shopping)
     def on_shopping(evt):
-        data = evt.data or {}
-        blob = data.get("shopping_data_blob") or data.get("shoppingDataBlob")
-        detail = ""
-        if isinstance(blob, (bytes, bytearray)):
-            try:
-                text = blob.decode("utf-8", errors="ignore")
-                if "{" in text:
-                    detail = f" | Dữ liệu: {text[:120]}..."
-                else:
-                    detail = f" | {text}"
-            except Exception:
-                detail = f" | {repr(blob)[:80]}"
-        print(f"[{get_time_str()}] [🛍️ TIKTOK SHOP] Có sự kiện giỏ hàng / Ghim sản phẩm{detail}", flush=True)
+        nonlocal active_product_id
+        action_type = evt.action_type or 1
+
+        # Bóc tách Product ID mới hoặc duy trì ID đang được ghim
+        new_pid = evt.product_id
+        if new_pid:
+            active_product_id = new_pid
+            action_desc = "Streamer vừa bấm GHIM SẢN PHẨM MỚI (SetPinProduct)"
+        else:
+            action_desc = "Duy trì / Làm mới hiển thị thẻ sản phẩm đang ghim (Card Refresh)"
+
+        product_id = active_product_id
+        
+        # Tự động trích xuất thông tin SEO, Tên tiếng Việt gốc, Ảnh Thumbnail #1 HD, Gian hàng và Lượt bán
+        info = evt.canonical_product_info(region="vn")
+        canonical_link = info.url or (f"https://shop.tiktok.com/vn/pdp/{product_id}" if product_id else "")
+        product_title = info.title
+        product_image = info.image
+
+        print("\n" + "🔥" * 45, flush=True)
+        print(f"[{get_time_str()}] [🛍️ TIKTOK SHOP - PHÁT HIỆN SỰ KIỆN GIỎ HÀNG / GHIM SẢN PHẨM!]", flush=True)
+        print(f"  📌 Trạng thái: {action_desc}", flush=True)
+        if product_title:
+            print(f"  📦 Tên Sản Phẩm: {product_title}", flush=True)
+        if product_id:
+            print(f"  🆔 Mã Sản Phẩm (Product ID): {product_id}", flush=True)
+        if info.seller:
+            print(f"  🏪 Gian Hàng: {info.seller}", flush=True)
+        if info.sold_count:
+            print(f"  📈 Lượt Bán: {info.sold_count}", flush=True)
+        if product_image:
+            print(f"  🖼️ Ảnh Đại Diện (Thumbnail #1 HD):", flush=True)
+            print(f"     {product_image}", flush=True)
+        if canonical_link:
+            print(f"  🔗 Link Mua Hàng TikTok Shop (Không Captcha):", flush=True)
+            print(f"     {canonical_link}", flush=True)
+        print(f"  🔢 Action Code: {action_type}", flush=True)
+        print("🔥" * 45 + "\n", flush=True)
 
     # ============================================================
     # 8. SỰ KIỆN PHỤ ĐỀ LỜI NÓI THỜI GIAN THỰC (AI SUBTITLES)
@@ -243,18 +258,35 @@ async def main():
                 print(f"[{get_time_str()}] [🎙️ LỜI NÓI STREAMER ({lang})] {text}", flush=True)
 
     # ============================================================
-    # 9. SỰ KIỆN MỤC TIÊU PHÒNG & BANNER KHUYẾN MÃI
+    # 9. SỰ KIỆN MỤC TIÊU PHÒNG & BANNER KHUYẾN MÃI / VOUCHER
     # ============================================================
     @client.on(EventType.goal_update)
     def on_goal(evt):
-        print(f"[{get_time_str()}] [🎯 MỤC TIÊU PHÒNG] Tiến độ mục tiêu live vừa được cập nhật!", flush=True)
+        data = evt.data or {}
+        contributor = data.get("contributor_id_str") or ""
+        count = data.get("contribute_count") or 0
+        extra = f" | Đóng góp: {count} đơn (User: {contributor})" if count > 0 else ""
+        print(f"[{get_time_str()}] [🎯 MỤC TIÊU DOANH SỐ / ĐƠN HÀNG] Cập nhật tiến độ mục tiêu phòng live{extra}!", flush=True)
 
     @client.on(EventType.in_room_banner)
     def on_banner(evt):
-        print(f"[{get_time_str()}] [🏷️ BANNER VOUCHER] Có banner ưu đãi / voucher mới xuất hiện trong phòng!", flush=True)
+        data = evt.data or {}
+        extra = data.get("extra") or ""
+        print(f"[{get_time_str()}] [🏷️ BANNER VOUCHER / DEAL] Xuất hiện banner ưu đãi / mã giảm giá trong phòng!", flush=True)
+        if extra:
+            print(f"    Chi tiết Voucher: {extra}", flush=True)
 
     # ============================================================
-    # 10. SỰ KIỆN PK BATTLE / LINK MIC & HỘI VIÊN
+    # 10. SỰ KIỆN VIP & QUÀ TẶNG KHỦNG (PRIVILEGE ADVANCE)
+    # ============================================================
+    @client.on(EventType.privilege_advance)
+    def on_privilege(evt):
+        data = evt.data or {}
+        scene = data.get("scene") or "VIP Advance"
+        print(f"\n[{get_time_str()}] [👑 ĐẠI GIA VIP / QUÀ TẶNG KHỦNG] Kích hoạt hiệu ứng đặc biệt ({scene}) toàn màn hình!", flush=True)
+
+    # ============================================================
+    # 11. SỰ KIỆN PK BATTLE / LINK MIC & HỘI VIÊN & BAO LÌ XÌ
     # ============================================================
     @client.on(EventType.link_mic_battle)
     def on_pk(evt):
@@ -285,7 +317,6 @@ async def main():
         sender = info.get("send_user_name") or "Ai đó"
         diamonds = info.get("diamond_count") or 0
         print(f"[{get_time_str()}] [🧧 BAO LÌ XÌ] {sender} đã thả bao lì xì trị giá {diamonds:,} kim cương!", flush=True)
-
 
     # Bắt đầu kết nối
     print(f"[{get_time_str()}] [*] Đang kết nối tới phòng live @{username}...", flush=True)
