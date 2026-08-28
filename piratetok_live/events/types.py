@@ -238,9 +238,30 @@ class TikTokEvent(NamedTuple):
 
     @property
     def product_url(self) -> str:
-        """Đường dẫn link mở sản phẩm trực tiếp trên TikTok Shop."""
+        """Đường dẫn link mở sản phẩm trực tiếp trên TikTok Shop (không bị Captcha)."""
         pid = self.product_id
-        return f"https://www.tiktok.com/view/product/{pid}" if pid else ""
+        return f"https://shop.tiktok.com/vn/pdp/{pid}" if pid else ""
+
+    def canonical_product_info(self, region: str = "vn") -> tuple[str, str]:
+        """Tự động resolve link SEO hoàn chỉnh và trích xuất tên sản phẩm từ URL slug."""
+        pid = self.product_id
+        if not pid:
+            return "", ""
+        from curl_cffi import requests
+        import urllib.parse
+        url = f"https://shop.tiktok.com/{region.lower()}/pdp/{pid}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+        }
+        try:
+            r = requests.get(url, headers=headers, impersonate="chrome120", allow_redirects=False, timeout=4)
+            canonical = r.headers.get("Location") or url
+            parsed = urllib.parse.urlparse(canonical)
+            parts = [p for p in parsed.path.split("/") if p and p not in (region.lower(), "pdp", pid)]
+            title = parts[0].replace("-", " ").title() if parts else ""
+            return canonical, title
+        except Exception:
+            return url, ""
 
     @property
     def action_type(self) -> int:
@@ -248,6 +269,7 @@ class TikTokEvent(NamedTuple):
         if isinstance(self.data, dict):
             return int(self.data.get("actionType") or self.data.get("action_type") or self.data.get("action") or 0)
         return 0
+
 
 
     @property

@@ -159,8 +159,12 @@ async def main():
             action_desc = "Duy trì / Làm mới hiển thị thẻ sản phẩm đang ghim (Card Refresh)"
             
         product_id = active_product_id
-        product_url = f"https://www.tiktok.com/view/product/{product_id}" if product_id else ""
         
+        # Tự động resolve Link SEO không bị Captcha và Tên sản phẩm
+        canonical_link, product_title = evt.canonical_product_info(region="vn")
+        if not canonical_link and product_id:
+            canonical_link = f"https://shop.tiktok.com/vn/pdp/{product_id}"
+
         # Bóc tách Shopping Data Blob
         blob = data.get("shoppingDataBlob") or data.get("shopping_data_blob")
         parsed = parse_shopping_blob(blob)
@@ -169,10 +173,12 @@ async def main():
         print(f"[{get_time_str()}] [🛍️ TIKTOK SHOP - PHÁT HIỆN SỰ KIỆN GIỎ HÀNG / GHIM SẢN PHẨM!]", flush=True)
         print(f"  📌 Trạng thái: {action_desc}", flush=True)
         
+        if product_title:
+            print(f"  📦 Tên Sản Phẩm: {product_title}", flush=True)
         if product_id:
             print(f"  🆔 Mã Sản Phẩm (Product ID): {product_id}", flush=True)
-        if product_url:
-            print(f"  🔗 Link Mua Hàng TikTok Shop: {product_url}", flush=True)
+        if canonical_link:
+            print(f"  🔗 Link Mua Hàng TikTok Shop (Không Captcha): {canonical_link}", flush=True)
             
         print(f"  🏷️ Loại hiển thị: {parsed.get('card_type', 'Thẻ Pop-up Sản Phẩm Nổi Bật (CardTypePopProduct)')}", flush=True)
         print(f"  💻 Nền tảng: {parsed.get('platform', 'TikTok Live Studio (ActionPlatform_LiveManager)')}", flush=True)
@@ -182,6 +188,7 @@ async def main():
             print(f"  📄 Chi tiết: {json.dumps(parsed['json_details'], ensure_ascii=False, indent=2)}", flush=True)
             
         print("🔥" * 45 + "\n", flush=True)
+
 
 
 
