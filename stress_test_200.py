@@ -3,7 +3,7 @@ import datetime
 import os
 import sys
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 # Đảm bảo in tiếng Việt & UTF-8 trên Windows
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
@@ -19,15 +19,33 @@ from piratetok_live import (
 )
 
 
+def get_time_str() -> str:
+    return datetime.datetime.now().strftime("%H:%M:%S")
+
+
+class WorkerState:
+    CONNECTING = "🟡 CONNECTING"
+    ONLINE = "🟢 ONLINE"
+    RECONNECTING = "🔄 RECONNECTING"
+    DISCONNECTED = "🔌 DISCONNECTED"
+    BLOCKED = "🚫 BLOCKED"
+    ERROR = "⚠️ ERROR"
+
+
 class BenchmarkMonitor:
-    """Bộ đếm và theo dõi hiệu năng hệ thống theo thời gian thực."""
+    """Bộ giám sát chi tiết từng Worker và toàn bộ hệ thống theo thời gian thực."""
 
     def __init__(self, target_workers: int):
         self.target_workers = target_workers
-        self.connected_count = 0
-        self.disconnected_count = 0
-        self.blocked_count = 0
-        self.error_count = 0
+        self.workers: Dict[int, Dict[str, Any]] = {
+            i: {
+                "status": WorkerState.CONNECTING,
+                "events": 0,
+                "last_error": "",
+                "connected_at": 0.0,
+            }
+            for i in range(1, target_workers + 1)
+        }
         self.total_events = 0
         self.chat_events = 0
         self.like_events = 0
@@ -35,28 +53,54 @@ class BenchmarkMonitor:
         self.shop_events = 0
         self.start_time = time.time()
         self._lock = asyncio.Lock()
+        self.recent_incidents: List[str] = []
 
-    async def record_connect(self):
+    async def record_connect(self, worker_id: int):
         async with self._lock:
-            self.connected_count += 1
+            self.workers[worker_id]["status"] = WorkerState.ONLINE
+            self.workers[worker_id]["connected_at"] = time.time()
+            self.workers[worker_id]["last_error"] = ""
 
-    async def record_disconnect(self):
+    async def record_reconnecting(self, worker_id: int, attempt: int, delay: float):
         async with self._lock:
-            if self.connected_count > 0:
-                self.connected_count -= 1
-            self.disconnected_count += 1
+            self.workers[worker_id]["status"] = WorkerState.RECONNECTING
+            msg = f"[{get_time_str()}] 🔄 [Worker #{worker_id:03d}] Đang kết nối lại lần {attempt} (chờ {delay}s)..."
+            self.recent_incidents.append(msg)
+            if len(self.recent_incidents) > 6:
+                self.recent_incidents.pop(0)
 
-    async def record_blocked(self):
+    async def record_disconnect(self, worker_id: int, reason: str = "Closed"):
         async with self._lock:
-            self.blocked_count += 1
+            self.workers[worker_id]["status"] = WorkerState.DISCONNECTED
+            self.workers[worker_id]["last_error"] = reason
+            msg = f"[{get_time_str()}] 🔌 [Worker #{worker_id:03d}] Đã ngắt kết nối: {reason}"
+            self.recent_incidents.append(msg)
+            if len(self.recent_incidents) > 6:
+                self.recent_incidents.pop(0)
 
-    async def record_error(self):
+    async def record_blocked(self, worker_id: int, reason: str):
         async with self._lock:
-            self.error_count += 1
+            self.workers[worker_id]["status"] = WorkerState.BLOCKED
+            self.workers[worker_id]["last_error"] = reason
+            msg = f"[{get_time_str()}] 🚫 [Worker #{worker_id:03d}] PHÁT HIỆN BỊ CHẶN: {reason}"
+            print(f"\n{msg}", flush=True)
+            self.recent_incidents.append(msg)
+            if len(self.recent_incidents) > 6:
+                self.recent_incidents.pop(0)
 
-    async def record_event(self, event_type: str):
+    async def record_error(self, worker_id: int, error_msg: str):
+        async with self._lock:
+            self.workers[worker_id]["status"] = WorkerState.ERROR
+            self.workers[worker_id]["last_error"] = error_msg
+            msg = f"[{get_time_str()}] ⚠️ [Worker #{worker_id:03d}] LỖI: {error_msg}"
+            self.recent_incidents.append(msg)
+            if len(self.recent_incidents) > 6:
+                self.recent_incidents.pop(0)
+
+    async def record_event(self, worker_id: int, event_type: str):
         async with self._lock:
             self.total_events += 1
+            self.workers[worker_id]["events"] += 1
             if event_type == EventType.chat:
                 self.chat_events += 1
             elif event_type == EventType.like:
@@ -70,7 +114,15 @@ class BenchmarkMonitor:
         elapsed = max(time.time() - self.start_time, 1)
         eps = self.total_events / elapsed
 
-        # Lấy thông tin RAM tiêu thụ của tiến trình Python hiện tại
+        # Thống kê số lượng từng trạng thái
+        online_list = [wid for wid, w in self.workers.items() if w["status"] == WorkerState.ONLINE]
+        blocked_list = [wid for wid, w in self.workers.items() if w["status"] == WorkerState.BLOCKED]
+        reconn_list = [wid for wid, w in self.workers.items() if w["status"] == WorkerState.RECONNECTING]
+        disc_list = [wid for wid, w in self.workers.items() if w["status"] == WorkerState.DISCONNECTED]
+        err_list = [wid for wid, w in self.workers.items() if w["status"] == WorkerState.ERROR]
+        conn_list = [wid for wid, w in self.workers.items() if w["status"] == WorkerState.CONNECTING]
+
+        # Đo RAM & CPU
         try:
             import psutil
             process = psutil.Process(os.getpid())
@@ -80,16 +132,39 @@ class BenchmarkMonitor:
             ram_mb = 0.0
             cpu_percent = 0.0
 
-        now_str = datetime.datetime.now().strftime("%H:%M:%S")
-        print("\n" + "=" * 90, flush=True)
+        now_str = get_time_str()
+        print("\n" + "=" * 95, flush=True)
         print(f"📊 [BENCHMARK DASHBOARD - {now_str}] THỜI GIAN CHẠY: {int(elapsed)}s", flush=True)
-        print(f"  🟢 Đang kết nối ổn định: {self.connected_count}/{self.target_workers} luồng", flush=True)
-        print(f"  🔴 Đã ngắt kết nối: {self.disconnected_count} | 🚫 Bị chặn (Blocked/415): {self.blocked_count} | ⚠️ Lỗi: {self.error_count}", flush=True)
-        print(f"  ⚡ Tốc độ xử lý: {eps:.1f} events/giây | Tổng sự kiện đã nhận: {self.total_events:,}", flush=True)
+        print(f"  🟢 ONLINE HOẠT ĐỘNG: {len(online_list)}/{self.target_workers} luồng", flush=True)
+        print(f"  🟡 Đang kết nối: {len(conn_list)} | 🔄 Đang reconnect: {len(reconn_list)}", flush=True)
+        print(f"  🚫 BỊ CHẶN (Blocked/415/429): {len(blocked_list)} luồng | 🔌 Đã ngắt: {len(disc_list)} | ⚠️ Lỗi khác: {len(err_list)}", flush=True)
+        print(f"  ⚡ Tốc độ bắt gói tin: {eps:.1f} events/giây | Tổng sự kiện đã nhận: {self.total_events:,}", flush=True)
         print(f"     -> 💬 Chat: {self.chat_events:,} | ❤️ Like: {self.like_events:,} | 🎁 Gift: {self.gift_events:,} | 🛍️ Shop: {self.shop_events:,}", flush=True)
         if ram_mb > 0:
             print(f"  💻 Tài nguyên hệ thống: RAM: {ram_mb:.1f} MB | CPU: {cpu_percent:.1f}%", flush=True)
-        print("=" * 90 + "\n", flush=True)
+
+        # In chi tiết danh sách các Worker bị chặn hoặc gặp sự cố
+        if blocked_list:
+            print("\n  🚨 DANH SÁCH WORKER BỊ CHẶN:", flush=True)
+            for wid in blocked_list[:10]:
+                err = self.workers[wid]["last_error"]
+                print(f"     * Worker #{wid:03d} -> Nguyên nhân: {err}", flush=True)
+            if len(blocked_list) > 10:
+                print(f"     * ... và {len(blocked_list) - 10} worker khác bị chặn.", flush=True)
+
+        if err_list:
+            print("\n  ⚠️ DANH SÁCH WORKER BỊ LỖI:", flush=True)
+            for wid in err_list[:5]:
+                err = self.workers[wid]["last_error"]
+                print(f"     * Worker #{wid:03d} -> Lỗi: {err}", flush=True)
+
+        # In nhật ký sự cố gần nhất
+        if self.recent_incidents:
+            print("\n  📜 NHẬT KÝ SỰ CỐ GẦN NHẤT:", flush=True)
+            for inc in self.recent_incidents[-4:]:
+                print(f"     {inc}", flush=True)
+
+        print("=" * 95 + "\n", flush=True)
 
 
 async def run_single_worker(
@@ -111,27 +186,41 @@ async def run_single_worker(
 
     @client.on(EventType.connected)
     async def on_conn(evt):
-        await monitor.record_connect()
+        await monitor.record_connect(worker_id)
+
+    @client.on(EventType.reconnecting)
+    async def on_reconn(evt):
+        d = evt.data or {}
+        await monitor.record_reconnecting(worker_id, d.get("attempt", 1), d.get("delay", 2.0))
 
     @client.on(EventType.disconnected)
     async def on_disc(evt):
-        await monitor.record_disconnect()
+        await monitor.record_disconnect(worker_id, "Phiên WSS kết thúc")
 
     @client.on(EventType.chat)
     @client.on(EventType.like)
     @client.on(EventType.gift)
     @client.on(EventType.oec_live_shopping)
     async def on_any_event(evt):
-        await monitor.record_event(evt.type)
+        await monitor.record_event(worker_id, evt.type)
 
     try:
         await client.connect()
     except Exception as e:
         err_str = str(e)
-        if "DEVICE_BLOCKED" in err_str or "415" in err_str or "429" in err_str:
-            await monitor.record_blocked()
+        # Phân loại chính xác nguyên nhân lỗi
+        if "DEVICE_BLOCKED" in err_str or "415" in err_str:
+            await monitor.record_blocked(worker_id, f"DEVICE_BLOCKED (HTTP 415) - Cắm cờ thiết bị / TTWID")
+        elif "429" in err_str or "Too Many Requests" in err_str:
+            await monitor.record_blocked(worker_id, f"RATE_LIMITED (HTTP 429) - Quá tải số lượng kết nối trên 1 IP")
+        elif "403" in err_str or "Forbidden" in err_str:
+            await monitor.record_blocked(worker_id, f"FORBIDDEN (HTTP 403) - IP bị tường lửa TikTok chặn")
+        elif "HostNotOnlineError" in err_str:
+            await monitor.record_error(worker_id, f"Streamer hiện không phát Live")
+        elif "Timeout" in err_str:
+            await monitor.record_error(worker_id, f"Timeout kết nối (Mạng nghẽn)")
         else:
-            await monitor.record_error()
+            await monitor.record_error(worker_id, f"{type(e).__name__}: {err_str[:60]}")
 
 
 async def stats_reporter_loop(monitor: BenchmarkMonitor, interval_sec: int = 5):
@@ -142,16 +231,16 @@ async def stats_reporter_loop(monitor: BenchmarkMonitor, interval_sec: int = 5):
 
 
 async def main():
-    # Cấu hình kịch bản test
     username = "swatchesbybaobao"
     total_workers = 200           # Số lượng luồng mong muốn
-    concurrency_limit = 20        # Số lượng kết nối mở đồng thời mỗi đợt (Staggered ramp-up)
-    ramp_up_delay = 0.05          # Độ trễ giữa mỗi client kết nối (50ms để không nghẽn socket TCP)
+    concurrency_limit = 20        # Số lượng kết nối mở đồng thời mỗi đợt
+    ramp_up_delay = 0.05          # Độ trễ giữa mỗi client (50ms)
 
-    print("\n" + "=" * 90)
+    print("\n" + "=" * 95)
     print(f"🚀 KHỞI ĐỘNG BENCHMARK KIỂM TRA ĐỘ ỔN ĐỊNH VÀ CHỊU TẢI: {total_workers} LUỒNG ĐỒNG THỜI")
     print(f"📌 Mục tiêu phòng Live: @{username}")
-    print("=" * 90)
+    print(f"🔍 Cơ chế nhận diện: Định danh Worker ID, Bắt mã lỗi (415, 429, 403) và Nhật ký thời gian thực")
+    print("=" * 95)
 
     # 1. Cấp token TTWID xác thực chuẩn
     print(f"[*] Đang chuẩn bị token TTWID xác thực an toàn qua Playwright...")
@@ -167,7 +256,7 @@ async def main():
     # Khởi chạy task in Dashboard định kỳ mỗi 5 giây
     reporter_task = asyncio.create_task(stats_reporter_loop(monitor, interval_sec=5))
 
-    # Semaphore kiểm soát tốc độ kết nối ban đầu để tránh dồn ứ TCP SYN
+    # Semaphore kiểm soát tốc độ kết nối ban đầu
     semaphore = asyncio.Semaphore(concurrency_limit)
 
     async def worker_wrapper(w_id: int):
