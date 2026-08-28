@@ -1,0 +1,26 @@
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Local TTWID caches & temporary files
+.ttwid_cache.json
+ttwid_pool.txt
+.test_cache.json
+
+# Environments
+.env
+.venv
+venv/
+ENV/
+
+# IDE / Editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
