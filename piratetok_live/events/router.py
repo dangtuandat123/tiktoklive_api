@@ -101,8 +101,11 @@ def decode(method: str, payload: bytes, room_id: str = "") -> List[TikTokEvent]:
     try:
         msg = proto_cls().parse(payload)
         data = msg.to_dict()
-    except (ValueError, KeyError, IndexError, TypeError):
-        return [TikTokEvent(EventType.unknown, {"method": method, "payload": payload}, room_id)]
+    except Exception as parse_err:
+        _log.debug("Proto strict parse for %s failed (%s), providing fallback payload dictionary", method, parse_err)
+        data = {"method": method, "raw_payload": payload, "parse_error": str(parse_err)}
+        msg = None
+
 
     # Gift streak helpers — inject computed fields
     if method == "WebcastGiftMessage" and isinstance(msg, schema.WebcastGiftMessage):
