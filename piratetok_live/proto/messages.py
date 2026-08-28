@@ -166,9 +166,10 @@ class WebcastGiftPanelUpdateMessage(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class WebcastInRoomBannerMessage(betterproto.Message):
     common: "Common" = betterproto.message_field(1)
-    raw_data_entries: List[bytes] = betterproto.bytes_field(2)
+    extra: str = betterproto.string_field(2)
     position: int = betterproto.int32_field(3)
     action_type: int = betterproto.int32_field(4)
+
 
 
 @dataclass(eq=False, repr=False)
