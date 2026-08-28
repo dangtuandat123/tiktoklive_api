@@ -91,3 +91,51 @@ class TikTokEvent(NamedTuple):
     type: str
     data: Any
     room_id: str = ""
+
+    @property
+    def user(self) -> dict:
+        """Trích xuất dictionary thông tin User nếu có."""
+        if isinstance(self.data, dict):
+            return self.data.get("user") or {}
+        return {}
+
+    @property
+    def user_nickname(self) -> str:
+        """Tên hiển thị / Nickname của người gửi sự kiện."""
+        u = self.user
+        return str(u.get("nickname") or u.get("nickName") or u.get("unique_id") or "")
+
+    @property
+    def user_id(self) -> str:
+        """ID định danh của người dùng."""
+        u = self.user
+        return str(u.get("id") or "")
+
+    @property
+    def comment(self) -> str:
+        """Nội dung bình luận / tin nhắn chat."""
+        if isinstance(self.data, dict):
+            return str(self.data.get("content") or self.data.get("comment") or "")
+        return ""
+
+    @property
+    def gift_name(self) -> str:
+        """Tên quà tặng nếu là sự kiện Gift."""
+        if isinstance(self.data, dict):
+            return str(self.data.get("gift", {}).get("name") or "")
+        return ""
+
+    @property
+    def repeat_count(self) -> int:
+        """Số lượng quà trong combo nếu là sự kiện Gift."""
+        if isinstance(self.data, dict):
+            return int(self.data.get("repeat_count") or self.data.get("repeatCount") or 1)
+        return 1
+
+    @property
+    def diamond_count(self) -> int:
+        """Tổng số kim cương/xu nếu là sự kiện Gift."""
+        if isinstance(self.data, dict):
+            return int(self.data.get("diamond_total") or self.data.get("gift", {}).get("diamondCount") or 0)
+        return 0
+

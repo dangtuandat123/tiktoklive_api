@@ -29,12 +29,28 @@ class TikTokLiveClient:
         self._language: Optional[str] = None
         self._region: Optional[str] = None
         self._stop: Optional[asyncio.Event] = None
+        self._room_id: Optional[str] = None
         self._listeners: Dict[str, List[Callable]] = {}
 
+    @property
+    def username(self) -> str:
+        """Tên tài khoản streamer mục tiêu."""
+        return self._username
+
+    @property
+    def room_id(self) -> Optional[str]:
+        """ID phòng Live hiện tại sau khi kết nối thành công."""
+        return self._room_id
+
+    @property
+    def is_connected(self) -> bool:
+        """Trạng thái kết nối WebSocket hiện tại."""
+        return self._stop is not None and not self._stop.is_set()
 
     def cdn_eu(self) -> "TikTokLiveClient":
         self._cdn_host = "webcast-ws.eu.tiktok.com"
         return self
+
 
     def cdn_us(self) -> "TikTokLiveClient":
         self._cdn_host = "webcast-ws.us.tiktok.com"
@@ -147,21 +163,32 @@ class TikTokLiveClient:
             proxy=self._proxy, user_agent=self._user_agent,
             language=lang, region=reg,
         )
+        self._room_id = room.room_id
         self._stop = asyncio.Event()
         self._emit(TikTokEvent(EventType.connected, {"room_id": room.room_id}, room.room_id))
 
         attempt = 0
         while not self._stop.is_set():
-            ttwid = self._extract_ttwid() or fetch_ttwid(
-                self._timeout, proxy=self._proxy, user_agent=self._user_agent,
-                username=self._username,
-            )
+            ttwid = self._extract_ttwid()
+            if not ttwid:
+                try:
+                    ttwid = fetch_ttwid(
+                        self._timeout, proxy=self._proxy, user_agent=self._user_agent,
+                        username=self._username,
+                    )
+                except Exception as cffi_err:
+                    _log.debug("curl_cffi fetch_ttwid failed (%s), falling back to Playwright...", cffi_err)
+                    try:
+                        from .auth.playwright_ttwid import get_ttwid
+                        ttwid = get_ttwid(username=self._username, proxy=self._proxy)
+                    except Exception as pw_err:
+                        raise RuntimeError(f"Không thể lấy cookie ttwid (cffi: {cffi_err} | playwright: {pw_err})") from pw_err
+
             wss_url = build_wss_url(
                 self._cdn_host, room.room_id, lang, reg,
                 compress=self._compress,
                 history_comment_count=self._history_comment_count,
             )
-
 
             is_device_blocked = False
             try:
@@ -178,7 +205,13 @@ class TikTokLiveClient:
                 )
             except DeviceBlockedError:
                 is_device_blocked = True
-                _log.warning("DEVICE_BLOCKED — rotating ttwid + UA")
+                _log.warning("DEVICE_BLOCKED — tự động xoay ttwid mới qua Playwright...")
+                try:
+                    from .auth.playwright_ttwid import get_ttwid
+                    self._cookies = f"ttwid={get_ttwid(username=self._username, proxy=self._proxy, force_refresh=True)}"
+                except Exception:
+                    pass
+
 
             if self._stop.is_set():
                 break
