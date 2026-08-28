@@ -99,10 +99,13 @@ class ProductInfo:
     url: str = ""
     image: str = ""
     images: List[str] = field(default_factory=list)
+    seller: str = ""
+    sold_count: str = ""
 
     def __iter__(self):
         # Hỗ trợ unpack tuple tự nhiên: url, title = evt.canonical_product_info()
         return iter((self.url, self.title))
+
 
 
 class TikTokEvent(NamedTuple):
@@ -259,10 +262,10 @@ class TikTokEvent(NamedTuple):
         pid = self.product_id
         return f"https://shop.tiktok.com/vn/pdp/{pid}" if pid else ""
 
-
     def canonical_product_info(self, region: str = "vn") -> ProductInfo:
-        """Tự động resolve link SEO hoàn chỉnh, trích xuất tên sản phẩm tiếng Việt và hình ảnh cover HD."""
+        """Tự động resolve link SEO hoàn chỉnh, trích xuất tên sản phẩm tiếng Việt, ảnh thumbnail #1 gốc, gian hàng và lượt bán."""
         pid = self.product_id
+
         if not pid:
             return ProductInfo()
         from curl_cffi import requests
@@ -278,6 +281,8 @@ class TikTokEvent(NamedTuple):
             full_title = ""
             main_image = ""
             images_list: List[str] = []
+            seller_name = ""
+            sold_count_str = ""
 
             # Thử lấy tiêu đề tiếng Việt gốc và danh sách ảnh từ HTML
             try:
@@ -288,17 +293,35 @@ class TikTokEvent(NamedTuple):
                 if h1_m:
                     full_title = re.sub(r"<[^>]+>", "", h1_m.group(1)).strip()
                     
-                # Bóc tách ảnh sản phẩm HD (1200x1200 hoặc 800x800, bỏ qua các icon/sticker badge)
-                raw_imgs = set(re.findall(r'https://[^"\'\s<>\\]*ibyteimg\.com/[^"\'\s<>\\]+', raw_html))
-                hd_1200 = [html_lib.unescape(i) for i in raw_imgs if "crop-webp:1200:1200" in i]
-                hd_800 = [html_lib.unescape(i) for i in raw_imgs if "resize-webp:800:800" in i]
-                other_product = [html_lib.unescape(i) for i in raw_imgs if ("resize-webp" in i or "crop-webp" in i) and "origin-image" not in i]
-                images_list = hd_1200 or hd_800 or other_product
+                # Bóc tách tên Seller / Gian hàng
+                seller_m = re.search(r"Do\s+([^<]+?)\s+bán", raw_html)
+                if seller_m:
+                    seller_name = html_lib.unescape(seller_m.group(1).strip())
+                    
+                # Bóc tách số lượng đã bán
+                sold_m = re.search(r"([0-9.,]+[kKmM]?)\s+đã\s+được\s+bán", raw_html)
+                if sold_m:
+                    sold_count_str = f"{sold_m.group(1).strip()} đã bán"
+
+                # Bóc tách ảnh sản phẩm HD THEO ĐÚNG THỨ TỰ TUẦN TỰ TRÊN GIAO DIỆN (Ảnh đầu tiên = Thumbnail #1)
+                all_matches = re.findall(r'https://[^"\'\s<>\\]*ibyteimg\.com/[^"\'\s<>\\]+', raw_html)
+                seen_urls = set()
+                ordered_1200: List[str] = []
+                ordered_800: List[str] = []
+                for m in all_matches:
+                    clean = html_lib.unescape(m)
+                    if "crop-webp:1200:1200" in clean and clean not in seen_urls:
+                        seen_urls.add(clean)
+                        ordered_1200.append(clean)
+                    elif "resize-webp:800:800" in clean and clean not in seen_urls:
+                        seen_urls.add(clean)
+                        ordered_800.append(clean)
+                
+                images_list = ordered_1200 or ordered_800
                 if images_list:
                     main_image = images_list[0]
             except Exception:
                 pass
-
 
             if not full_title:
                 # Fallback lấy từ URL slug
@@ -311,14 +334,16 @@ class TikTokEvent(NamedTuple):
                 title=full_title,
                 url=canonical,
                 image=main_image,
-                images=images_list
+                images=images_list,
+                seller=seller_name,
+                sold_count=sold_count_str
             )
         except Exception:
             return ProductInfo(product_id=pid, url=url)
 
 
-
     @property
+
     def action_type(self) -> int:
         """Mã hành động nếu là sự kiện OEC Shopping / Member / Control."""
         if isinstance(self.data, dict):

@@ -178,10 +178,15 @@ async def main():
             print(f"  📦 Tên Sản Phẩm: {product_title}", flush=True)
         if product_id:
             print(f"  🆔 Mã Sản Phẩm (Product ID): {product_id}", flush=True)
+        if info.seller:
+            print(f"  🏪 Gian Hàng: {info.seller}", flush=True)
+        if info.sold_count:
+            print(f"  📈 Lượt Bán: {info.sold_count}", flush=True)
         if product_image:
-            print(f"  🖼️ Ảnh Sản Phẩm (HD): {product_image}", flush=True)
+            print(f"  🖼️ Ảnh Đại Diện (Thumbnail #1 HD): {product_image}", flush=True)
         if canonical_link:
             print(f"  🔗 Link Mua Hàng TikTok Shop (Không Captcha): {canonical_link}", flush=True)
+
 
             
         print(f"  🏷️ Loại hiển thị: {parsed.get('card_type', 'Thẻ Pop-up Sản Phẩm Nổi Bật (CardTypePopProduct)')}", flush=True)
