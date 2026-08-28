@@ -53,10 +53,16 @@ async def connect_wss(
 
     try:
         async with ws_client.connect(
-            wss_url, additional_headers=headers, proxy=ws_proxy,
+            wss_url,
+            additional_headers=headers,
+            proxy=ws_proxy,
+            ping_interval=None,
+            ping_timeout=None,
+            max_size=None,
         ) as ws:
             await ws.send(build_heartbeat(room_id))
             await ws.send(build_enter_room(room_id))
+
 
             hb_task = asyncio.create_task(_heartbeat_loop(ws, room_id, stop_event))
             try:
@@ -125,8 +131,16 @@ async def _process_frame(
 
     frame = WebcastPushFrame().parse(raw)
 
+    if frame.payload_type == "hb":
+        try:
+            await ws.send(build_heartbeat(room_id))
+        except Exception as err:
+            _log.debug("server heartbeat response failed: %s", err)
+        return
+
     if frame.payload_type == "msg":
         decompressed = decompress_if_gzipped(frame.payload)
+
         response = WebcastResponse().parse(decompressed)
 
         if response.needs_ack and response.internal_ext:
