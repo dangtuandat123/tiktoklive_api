@@ -1,5 +1,14 @@
 import asyncio
+import sys
+
+# Đảm bảo in tiếng Việt & Emoji trên Windows không bị lỗi bảng mã
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from piratetok_live import TikTokLiveClient, EventType, get_ttwid
+
 
 async def main():
     username = "swatchesbybaobao"
@@ -23,6 +32,11 @@ async def main():
         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
 
+    # Đăng ký nhận sự kiện Kết nối thành công
+    @client.on(EventType.connected)
+    def on_connected(evt):
+        print(f"\n[🚀 Connected] Kết nối thành công tới phòng Live ID: {evt.room_id}", flush=True)
+
     # Đăng ký nhận sự kiện Bình luận (Chat)
     @client.on(EventType.chat)
     def on_chat(evt):
@@ -30,7 +44,7 @@ async def main():
         user = data.get("user") or {}
         nick = user.get("nickname") or user.get("nickName") or "Ẩn danh"
         comment = data.get("content") or data.get("comment") or ""
-        print(f"[💬 Chat] {nick}: {comment}")
+        print(f"[💬 Chat] {nick}: {comment}", flush=True)
 
     # Đăng ký nhận sự kiện Tặng Quà (Gift)
     @client.on(EventType.gift)
@@ -40,9 +54,9 @@ async def main():
         nick = user.get("nickname") or "Ẩn danh"
         gift = data.get("gift") or {}
         gift_name = gift.get("name") or "Quà"
-        count = data.get("repeatCount") or 1
-        diamonds = gift.get("diamondCount", 0)
-        print(f"[🎁 Gift] {nick} tặng {gift_name} x{count} ({diamonds} xu)")
+        count = data.get("repeat_count") or data.get("repeatCount") or 1
+        diamonds = evt.data.get("diamond_total") or gift.get("diamondCount", 0)
+        print(f"[🎁 Gift] {nick} tặng {gift_name} x{count} ({diamonds} xu)", flush=True)
 
     # Đăng ký nhận sự kiện Thả Tim (Like)
     @client.on(EventType.like)
@@ -51,15 +65,16 @@ async def main():
         user = data.get("user") or {}
         nick = user.get("nickname") or "Khán giả"
         total = data.get("total") or 0
-        print(f"[❤️ Like] {nick} đã thả tim (Tổng: {total})")
+        count = data.get("count") or 1
+        print(f"[❤️ Like] {nick} đã thả +{count} tim (Tổng: {total})", flush=True)
 
     # Đăng ký nhận sự kiện Ghim Giỏ hàng / TikTok Shop
     @client.on(EventType.oec_live_shopping)
     def on_shopping(evt):
-        print(f"[🛍️ TikTok Shop] Có sự kiện giỏ hàng mới!")
+        print(f"[🛍️ TikTok Shop] Có sự kiện giỏ hàng mới: {evt.data}", flush=True)
 
-    print("Đang kết nối tới phòng live...")
+    print(f"[*] Đang kết nối tới phòng live @{username}...", flush=True)
     await client.connect()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main())
