@@ -216,10 +216,45 @@ async def main():
     @client.on(EventType.oec_live_shopping)
     def on_shopping(evt):
         data = evt.data or {}
-        print(f"[{get_time_str()}] [🛍️ TIKTOK SHOP] Có sự kiện giỏ hàng / ghim sản phẩm mới!", flush=True)
+        blob = data.get("shopping_data_blob") or data.get("shoppingDataBlob")
+        detail = ""
+        if isinstance(blob, (bytes, bytearray)):
+            try:
+                text = blob.decode("utf-8", errors="ignore")
+                if "{" in text:
+                    detail = f" | Dữ liệu: {text[:120]}..."
+                else:
+                    detail = f" | {text}"
+            except Exception:
+                detail = f" | {repr(blob)[:80]}"
+        print(f"[{get_time_str()}] [🛍️ TIKTOK SHOP] Có sự kiện giỏ hàng / Ghim sản phẩm{detail}", flush=True)
 
     # ============================================================
-    # 8. SỰ KIỆN PK BATTLE / LINK MIC & HỘI VIÊN
+    # 8. SỰ KIỆN PHỤ ĐỀ LỜI NÓI THỜI GIAN THỰC (AI SUBTITLES)
+    # ============================================================
+    @client.on(EventType.caption)
+    def on_caption(evt):
+        data = evt.data or {}
+        content_list = data.get("content") or []
+        for item in content_list:
+            text = item.get("text") or ""
+            lang = item.get("language") or "vi"
+            if text:
+                print(f"[{get_time_str()}] [🎙️ LỜI NÓI STREAMER ({lang})] {text}", flush=True)
+
+    # ============================================================
+    # 9. SỰ KIỆN MỤC TIÊU PHÒNG & BANNER KHUYẾN MÃI
+    # ============================================================
+    @client.on(EventType.goal_update)
+    def on_goal(evt):
+        print(f"[{get_time_str()}] [🎯 MỤC TIÊU PHÒNG] Tiến độ mục tiêu live vừa được cập nhật!", flush=True)
+
+    @client.on(EventType.in_room_banner)
+    def on_banner(evt):
+        print(f"[{get_time_str()}] [🏷️ BANNER VOUCHER] Có banner ưu đãi / voucher mới xuất hiện trong phòng!", flush=True)
+
+    # ============================================================
+    # 10. SỰ KIỆN PK BATTLE / LINK MIC & HỘI VIÊN
     # ============================================================
     @client.on(EventType.link_mic_battle)
     def on_pk(evt):
@@ -250,6 +285,7 @@ async def main():
         sender = info.get("send_user_name") or "Ai đó"
         diamonds = info.get("diamond_count") or 0
         print(f"[{get_time_str()}] [🧧 BAO LÌ XÌ] {sender} đã thả bao lì xì trị giá {diamonds:,} kim cương!", flush=True)
+
 
     # Bắt đầu kết nối
     print(f"[{get_time_str()}] [*] Đang kết nối tới phòng live @{username}...", flush=True)
