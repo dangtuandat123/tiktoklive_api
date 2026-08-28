@@ -48,16 +48,8 @@ def decode_shopping_blob(blob: bytes | str | None) -> dict | str | None:
     return blob
 
 
-# Danh sách từ khóa nhận diện khách hàng đang tương tác mua sắm / chốt đơn
-BUYING_INTENT_KEYWORDS = [
-    r"đã mua", r"đã đặt", r"da mua", r"da dat", r"săn", r"san dc", r"săn được",
-    r"check đơn", r"mã", r"combo", r"giá", r"chai", r"hộp", r"size", r"màu",
-    r"freeship", r"voucher", r"giỏ hàng", r"ship", r"tặng", r"mua", r"đơn"
-]
-BUYING_REGEX = re.compile("|".join(BUYING_INTENT_KEYWORDS), re.IGNORECASE)
-
-
 async def main():
+
     # Tên kênh streamer bán hàng mục tiêu
     username = "swatchesbybaobao"
     
