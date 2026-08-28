@@ -139,17 +139,27 @@ async def main():
         print(f"[{get_time_str()}] [*] Room ID: {evt.room_id} | Đang theo dõi các sự kiện Giỏ hàng & Ghim sản phẩm...", flush=True)
         print("=" * 85 + "\n", flush=True)
 
+    active_product_id: str = ""
+
     # ============================================================
     # 2. SỰ KIỆN TIKTOK SHOP CHÍNH THỨC (OEC LIVE SHOPPING)
     # ============================================================
     @client.on(EventType.oec_live_shopping)
     def on_oec_shopping(evt):
+        nonlocal active_product_id
         data = evt.data or {}
         action_type = evt.action_type or 1
         
-        # Bóc tách Product ID & Link trực tiếp qua thuộc tính có sẵn
-        product_id = evt.product_id or extract_product_id(data.get("productIdRaw"))
-        product_url = evt.product_url or (f"https://www.tiktok.com/view/product/{product_id}" if product_id else "")
+        # Bóc tách Product ID mới (nếu có) hoặc duy trì Product ID đang được ghim
+        new_pid = evt.product_id or extract_product_id(data.get("productIdRaw"))
+        if new_pid:
+            active_product_id = new_pid
+            action_desc = "Streamer vừa bấm GHIM SẢN PHẨM MỚI (SetPinProduct)"
+        else:
+            action_desc = "Duy trì / Làm mới hiển thị thẻ sản phẩm đang ghim (Card Refresh)"
+            
+        product_id = active_product_id
+        product_url = f"https://www.tiktok.com/view/product/{product_id}" if product_id else ""
         
         # Bóc tách Shopping Data Blob
         blob = data.get("shoppingDataBlob") or data.get("shopping_data_blob")
@@ -157,7 +167,7 @@ async def main():
 
         print("\n" + "🔥" * 45, flush=True)
         print(f"[{get_time_str()}] [🛍️ TIKTOK SHOP - PHÁT HIỆN SỰ KIỆN GIỎ HÀNG / GHIM SẢN PHẨM!]", flush=True)
-        print(f"  📌 Hành động: {parsed.get('action', 'Streamer vừa bấm GHIM SẢN PHẨM (SetPinProduct)')}", flush=True)
+        print(f"  📌 Trạng thái: {action_desc}", flush=True)
         
         if product_id:
             print(f"  🆔 Mã Sản Phẩm (Product ID): {product_id}", flush=True)
@@ -172,6 +182,7 @@ async def main():
             print(f"  📄 Chi tiết: {json.dumps(parsed['json_details'], ensure_ascii=False, indent=2)}", flush=True)
             
         print("🔥" * 45 + "\n", flush=True)
+
 
 
 
