@@ -145,11 +145,11 @@ async def main():
     @client.on(EventType.oec_live_shopping)
     def on_oec_shopping(evt):
         data = evt.data or {}
-        action_type = data.get("actionType") or data.get("action_type") or 1
+        action_type = evt.action_type or 1
         
-        # Bóc tách Product ID
-        product_id_field = data.get("productIdRaw") or data.get("product_id_raw")
-        product_id = extract_product_id(product_id_field)
+        # Bóc tách Product ID & Link trực tiếp qua thuộc tính có sẵn
+        product_id = evt.product_id or extract_product_id(data.get("productIdRaw"))
+        product_url = evt.product_url or (f"https://www.tiktok.com/view/product/{product_id}" if product_id else "")
         
         # Bóc tách Shopping Data Blob
         blob = data.get("shoppingDataBlob") or data.get("shopping_data_blob")
@@ -161,7 +161,8 @@ async def main():
         
         if product_id:
             print(f"  🆔 Mã Sản Phẩm (Product ID): {product_id}", flush=True)
-            print(f"  🔗 Link Mua Hàng TikTok Shop: https://www.tiktok.com/view/product/{product_id}", flush=True)
+        if product_url:
+            print(f"  🔗 Link Mua Hàng TikTok Shop: {product_url}", flush=True)
             
         print(f"  🏷️ Loại hiển thị: {parsed.get('card_type', 'Thẻ Pop-up Sản Phẩm Nổi Bật (CardTypePopProduct)')}", flush=True)
         print(f"  💻 Nền tảng: {parsed.get('platform', 'TikTok Live Studio (ActionPlatform_LiveManager)')}", flush=True)
@@ -171,6 +172,7 @@ async def main():
             print(f"  📄 Chi tiết: {json.dumps(parsed['json_details'], ensure_ascii=False, indent=2)}", flush=True)
             
         print("🔥" * 45 + "\n", flush=True)
+
 
 
 

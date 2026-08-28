@@ -198,26 +198,55 @@ class TikTokEvent(NamedTuple):
                 try:
                     raw_bytes = base64.b64decode(raw) if isinstance(raw, str) else raw
                     stream = io.BytesIO(raw_bytes)
-                    while True:
-                        b = stream.read(1)
-                        if not b:
-                            break
+                    
+                    def decode_varint(s):
                         res, shift = 0, 0
                         while True:
+                            b = s.read(1)
+                            if not b:
+                                return None
                             byte = b[0]
                             res |= (byte & 0x7F) << shift
                             if not (byte & 0x80):
                                 break
                             shift += 7
-                            b = stream.read(1)
-                            if not b:
-                                break
-                        if res > 1000000000:
-                            return str(res)
+                        return res
+
+                    while True:
+                        tag = decode_varint(stream)
+                        if tag is None:
+                            break
+                        wire = tag & 0x07
+                        if wire == 0:
+                            val = decode_varint(stream)
+                            if val and val > 1000000000:
+                                return str(val)
+                        elif wire == 2:
+                            l = decode_varint(stream)
+                            if l:
+                                stream.read(l)
+                        elif wire == 1:
+                            stream.read(8)
+                        elif wire == 5:
+                            stream.read(4)
                 except Exception:
                     pass
             return str(self.data.get("product_id") or "")
         return ""
+
+    @property
+    def product_url(self) -> str:
+        """Đường dẫn link mở sản phẩm trực tiếp trên TikTok Shop."""
+        pid = self.product_id
+        return f"https://www.tiktok.com/view/product/{pid}" if pid else ""
+
+    @property
+    def action_type(self) -> int:
+        """Mã hành động nếu là sự kiện OEC Shopping / Member / Control."""
+        if isinstance(self.data, dict):
+            return int(self.data.get("actionType") or self.data.get("action_type") or self.data.get("action") or 0)
+        return 0
+
 
     @property
     def is_host(self) -> bool:
