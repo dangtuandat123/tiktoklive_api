@@ -155,6 +155,7 @@ class PlaywrightTTWIDGenerator:
         async with async_playwright() as p:
             for channel in channels_to_try:
                 browser = None
+                context = None
                 try:
                     launch_kwargs: Dict[str, Any] = {
                         "headless": self.headless,
@@ -173,16 +174,20 @@ class PlaywrightTTWIDGenerator:
                         ignore_https_errors=True,
                     )
 
-                    # Tiêm script ẩn danh
+                    # Tiêm script ẩn danh bảo vệ
                     await context.add_init_script(_STEALTH_JS)
                     page = await context.new_page()
 
                     # Tối ưu: Chặn tải hình ảnh, font, css, media để lấy cookie siêu tốc (<1.5s)
+                    # Bọc try-except để tránh lỗi nếu route đã bị huỷ trước
                     async def _route_interceptor(route):
-                        if route.request.resource_type in _BLOCKED_RESOURCE_TYPES:
-                            await route.abort()
-                        else:
-                            await route.continue_()
+                        try:
+                            if route.request.resource_type in _BLOCKED_RESOURCE_TYPES:
+                                await route.abort()
+                            else:
+                                await route.continue_()
+                        except Exception:
+                            pass
 
                     await page.route("**/*", _route_interceptor)
 
@@ -196,31 +201,39 @@ class PlaywrightTTWIDGenerator:
                     except Exception as nav_err:
                         _log.debug("Page goto soft timeout/commit: %s", nav_err)
 
-                    # Lấy danh sách cookie (thử polling tối đa 3 lần cách nhau 500ms)
-                    for _ in range(5):
+                    # Lấy danh sách cookie (polling kiểm tra nhanh)
+                    for _ in range(6):
                         cookies = await context.cookies()
                         for c in cookies:
                             if c.get("name") == "ttwid" and c.get("value"):
                                 val = str(c["value"])
                                 self._write_cache(val)
-                                await browser.close()
                                 return val
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(0.4)
 
-                    await browser.close()
                 except Exception as err:
                     last_exception = err
                     _log.debug("Thử channel %s thất bại: %s", channel, err)
+                    continue
+                finally:
+                    if context:
+                        try:
+                            await context.close()
+                        except Exception:
+                            pass
                     if browser:
                         try:
                             await browser.close()
                         except Exception:
                             pass
-                    continue
 
         if last_exception:
-            raise RuntimeError(f"Playwright: Không thể lấy ttwid từ TikTok: {last_exception}") from last_exception
+            raise RuntimeError(
+                f"Playwright: Không thể khởi chạy trình duyệt hoặc lấy cookie ({last_exception}). "
+                "Hãy đảm bảo đã chạy: 'playwright install chromium' hoặc máy có sẵn Google Chrome / Microsoft Edge."
+            ) from last_exception
         raise RuntimeError("Playwright: Trang web TikTok không trả về cookie ttwid.")
+
 
     # =========================================================================
     # GIAO TIẾP SYNC (ĐỒNG BỘ - AN TOÀN TRONG MỌI LUỒNG)
