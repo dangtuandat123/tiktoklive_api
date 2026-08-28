@@ -252,11 +252,20 @@ Quản lý chi tiết từng byte truyền qua kết nối WebSocket WSS.
 Định nghĩa và điều phối giải mã Protobuf thành các đối tượng sự kiện.
 
 #### A. `piratetok_live/events/types.py`
-*   `EventType`: Chứa toàn bộ 72 hằng số tên sự kiện (vd: `connected`, `chat`, `gift`, `like`, `member`, `social`, `follow`, `share`, `join`, `live_ended`, `oec_live_shopping`,...).
+*   `EventType`: Chứa toàn bộ các hằng số tên sự kiện (vd: `connected`, `chat`, `gift`, `like`, `member`, `social`, `follow`, `share`, `join`, `live_ended`, `oec_live_shopping`, `privilege_advance`,...).
+*   `ProductInfo`: Data Model chứa thông tin bóc tách hoàn chỉnh của sản phẩm TikTok Shop (`product_id`, `title`, `url`, `image`, `images`, `seller`, `sold_count`).
 *   `TikTokEvent(NamedTuple)`:
     *   `type: str`: Tên loại sự kiện.
     *   `data: Any`: Dữ liệu sự kiện đã được chuyển sang kiểu `dict` Python.
     *   `room_id: str`: ID phòng livestream đang phát.
+    *   **Các thuộc tính Ergonomic có sẵn**:
+        *   `evt.product_id`: Lấy mã ID định danh duy nhất của sản phẩm TikTok Shop.
+        *   `evt.product_url`: Đường dẫn link mua hàng TikTok Shop chuẩn SEO không bị Captcha.
+        *   `evt.canonical_product_info(region="vn") -> ProductInfo`: Tự động trích xuất Tên sản phẩm tiếng Việt gốc, Ảnh bìa Thumbnail #1 HD, Bộ sưu tập ảnh gallery, Tên gian hàng và Lượt bán.
+        *   `evt.viewer_count`, `evt.total_users`: Số người đang xem trực tiếp và tổng lượt xem.
+        *   `evt.like_count`, `evt.total_likes`: Số lượt thả tim trong sự kiện và tổng like phòng.
+        *   `evt.is_host`, `evt.is_mod`, `evt.is_sub`, `evt.is_fan`, `evt.fans_club_name`, `evt.fans_club_level`: Quyền hạn và huy hiệu người dùng.
+
 
 #### B. `piratetok_live/events/router.py`
 *   `_METHOD_MAP: Dict[str, str]`: Bảng tra cứu ánh xạ 64 tên Webcast method sang tên `EventType`.
@@ -525,7 +534,17 @@ Mô hình thông tin người dùng được trích xuất từ SIGI state:
 *   `accumulated_count: int`: Tổng số lượt thích được cộng dồn thủ công từ các delta.
 *   `went_backwards: bool`: Cờ đánh dấu phát hiện gói tin từ server shard bị nhảy lùi số lượng.
 
+### 5.5. `ProductInfo` (`piratetok_live.events.types`)
+*   `product_id: str`: Mã ID định danh duy nhất của sản phẩm trên TikTok Shop toàn cầu.
+*   `title: str`: Tên sản phẩm Tiếng Việt đầy đủ có dấu chuẩn SEO.
+*   `url: str`: Đường link trực tiếp mở trang mua hàng không dính Captcha.
+*   `image: str`: Link ảnh bìa đại diện Thumbnail #1 HD độ phân giải cao (1200x1200).
+*   `images: List[str]`: Danh sách toàn bộ ảnh chi tiết trong bộ sưu tập gallery (đúng thứ tự tuần tự).
+*   `seller: str`: Tên gian hàng / Đơn vị bán hàng chính hãng.
+*   `sold_count: str`: Tổng số lượng sản phẩm đã bán ra trên sàn.
+
 ---
+
 
 ## 6. SỔ TAY HƯỚNG DẪN BẢO TRÌ & XỬ LÝ SỰ CỐ
 
@@ -641,3 +660,51 @@ if info.stream_url:
     print(f"Link Full HD: {info.stream_url.flv_origin}")
     print(f"Link HD 720p: {info.stream_url.flv_hd}")
 ```
+
+### 7.4. Giám sát Giỏ Hàng & Bóc Tách Sản Phẩm TikTok Shop (OEC Live Shopping)
+```python
+import asyncio
+from piratetok_live import TikTokLiveClient, EventType, get_ttwid
+
+async def main():
+    username = "swatchesbybaobao"
+    client = TikTokLiveClient(username)
+    
+    # Cấp token TTWID xác thực an toàn
+    client.cookies(f"ttwid={get_ttwid(username)}")
+
+    active_product_id = ""
+
+    @client.on(EventType.oec_live_shopping)
+    def on_shop(evt):
+        nonlocal active_product_id
+        
+        # Bóc tách Product ID mới hoặc duy trì trạng thái ghim hiện tại
+        if evt.product_id:
+            active_product_id = evt.product_id
+            
+        # Tự động trích xuất thông tin SEO, Tên tiếng Việt gốc, Ảnh Thumbnail #1 HD, Gian hàng và Lượt bán
+        info = evt.canonical_product_info(region="vn")
+        
+        print("\n" + "🔥" * 45)
+        print("[🛍️ TIKTOK SHOP - PHÁT HIỆN SỰ KIỆN GIỎ HÀNG / GHIM SẢN PHẨM!]")
+        if info.title:
+            print(f"  📦 Tên Sản Phẩm: {info.title}")
+        if info.product_id or active_product_id:
+            print(f"  🆔 Mã Sản Phẩm: {info.product_id or active_product_id}")
+        if info.seller:
+            print(f"  🏪 Gian Hàng: {info.seller}")
+        if info.sold_count:
+            print(f"  📈 Lượt Bán: {info.sold_count}")
+        if info.image:
+            print(f"  🖼️ Ảnh Bìa (Thumbnail #1 HD): {info.image}")
+        if info.url:
+            print(f"  🔗 Link Mua Hàng (Không Captcha): {info.url}")
+        print("🔥" * 45 + "\n")
+
+    await client.connect()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
