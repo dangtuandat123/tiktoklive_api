@@ -708,3 +708,47 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
+---
+
+## 8. MÁY CHỦ WEBSOCKET GATEWAY & TÍCH HỢP ĐA HỆ THỐNG (`ws_server.py`)
+
+Thư viện tích hợp sẵn một **WebSocket Gateway Server** chuyên dụng (`ws_server.py`) đóng vai trò làm trung tâm phân phối dữ liệu (Event Broker). Mọi hệ thống bên ngoài (**Node.js, C#, PHP, Java, Go, Unity, Web App, OBS Browser Source**) đều có thể kết nối vào và nhận toàn bộ 100% sự kiện Live theo thời gian thực dưới định dạng **JSON chuẩn hóa**.
+
+### 8.1. Khởi Chạy WebSocket Gateway Server
+
+```bash
+# Khởi chạy server trên cổng mặc định 8765
+python ws_server.py
+
+# Khởi chạy với cổng tùy chỉnh hoặc Proxy
+python ws_server.py --port 9000 --proxy "http://127.0.0.1:8080"
+```
+
+### 8.2. Hai Cách Kết Nối Linh Hoạt
+
+#### Cách 1: Kết Nối Bằng URL Query Param *(Dành cho Web Frontend / OBS Overlay / Unity)*
+Chỉ cần mở kết nối WebSocket tới URL:
+```text
+ws://localhost:8765/live?username=swatchesbybaobao
+```
+*(Server sẽ tự động đăng ký phòng `@swatchesbybaobao` và truyền dữ liệu ngay lập tức).*
+
+#### Cách 2: Kết Nối & Gửi Lệnh JSON *(Dành cho Backend Microservices)*
+Mở kết nối tới `ws://localhost:8765` và gửi các lệnh điều khiển:
+* **Đăng ký phòng:** `{"action": "subscribe", "username": "swatchesbybaobao"}`
+* **Hủy đăng ký:** `{"action": "unsubscribe", "username": "swatchesbybaobao"}`
+* **Danh sách phòng đang chạy:** `{"action": "list_rooms"}`
+* **Kiểm tra độ trễ (Ping/Pong):** `{"action": "ping"}`
+
+### 8.3. Cơ Chế Quản Lý Phòng Đa Luồng Thông Minh (`RoomHubManager`)
+* **Gộp kết nối (Connection Multiplexing):** Nếu có 50 client bên ngoài cùng theo dõi streamer `@swatchesbybaobao`, hệ thống **chỉ duy trì 1 kết nối duy nhất tới TikTok** và broadcast lại cho 50 client ➔ Tiết kiệm 99% băng thông và tránh hoàn toàn nguy cơ bị TikTok chặn!
+* **Tự động giải phóng (Auto Cleanup):** Khi toàn bộ client thoát khỏi phòng, server sẽ tự động ngắt kết nối `TikTokLiveClient` sau 30 giây để giải phóng RAM và CPU.
+
+### 8.4. Giao Diện Web Dashboard Test Trực Quan (`ws_client_example.html`)
+Mở file [`ws_client_example.html`](file:///d:/Workspace/livepy/ws_client_example.html) trực tiếp bằng trình duyệt để trải nghiệm:
+* 💬 Khung Chat thời gian thực với đầy đủ Avatar, Huy hiệu Fan Cứng, VIP, Quản trị viên.
+* 🛍️ Khung ghim sản phẩm TikTok Shop với Ảnh HD, Tên tiếng Việt, Gian hàng, Lượt bán và Link mua hàng trực tiếp.
+* 🎁 Bảng thông báo Quà tặng bay và nhân số lượng Combo Streak.
+* 🎙️ Thanh phụ đề lời nói AI (Real-time Speech-to-Text).
+
+
