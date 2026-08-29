@@ -119,6 +119,7 @@ class RoomHub:
         self.active_product_id: str = ""
         self.active_product_info: Optional[ProductInfo] = None
 
+        self.tiktok_client: Optional[TikTokLiveClient] = None
         self.total_broadcasts = 0
         self.last_empty_time: Optional[float] = None
         self.created_at = time.time()
@@ -140,20 +141,19 @@ class RoomHub:
         return False
 
     async def broadcast(self, payload: Dict[str, Any]):
-        """Gửi gói tin JSON tới toàn bộ client đang theo dõi phòng này."""
+        """Gửi gói tin JSON tới toàn bộ client đang theo dõi phòng này đồng thời trong microsecond."""
         if not self.clients:
             return
         self.total_broadcasts += 1
         message_str = json.dumps(payload, ensure_ascii=False)
-        stale_clients = []
-        for ws in list(self.clients):
-            try:
-                await ws.send(message_str)
-            except Exception:
-                stale_clients.append(ws)
-
-        for ws in stale_clients:
-            self.remove_client(ws)
+        client_list = list(self.clients)
+        results = await asyncio.gather(
+            *[ws.send(message_str) for ws in client_list],
+            return_exceptions=True,
+        )
+        for ws, res in zip(client_list, results):
+            if isinstance(res, Exception):
+                self.remove_client(ws)
 
     def start_worker(self, ttwid_token: str):
         """Khởi động worker kết nối ngầm tới TikTok Live."""
@@ -162,8 +162,10 @@ class RoomHub:
             self.client_task = asyncio.create_task(self._run_tiktok_client(ttwid_token))
 
     async def stop(self):
-        """Dừng kết nối TikTok Live của phòng này."""
+        """Dừng kết nối TikTok Live của phòng này ngay lập tức."""
         self.stop_event.set()
+        if self.tiktok_client:
+            self.tiktok_client.disconnect()
         if self.client_task and not self.client_task.done():
             self.client_task.cancel()
             try:
@@ -172,447 +174,475 @@ class RoomHub:
                 pass
         _log.info(f"🛑 [Room @{self.username}] Đã dừng worker TikTok Live.")
 
+
     async def _run_tiktok_client(self, ttwid_token: str):
-        _log.info(f"🚀 [Room @{self.username}] Đang khởi động TikTokLiveClient...")
-        client = (
-            TikTokLiveClient(self.username)
-            .cookies(f"ttwid={ttwid_token}")
-            .max_retries(10)
-            .stale_timeout(45.0)
-        )
-        if self.proxy:
-            client.proxy(self.proxy)
+        current_token = ttwid_token
+        retry_delay = 2.0
 
-        # 1. Trạng thái kết nối
-        @client.on(EventType.connected)
-        async def on_connected(evt: TikTokEvent):
-            self.room_id = evt.room_id
-            self.is_connected = True
-            _log.info(f"🟢 [Room @{self.username}] Đã kết nối thành công! Room ID: {self.room_id}")
-            await self.broadcast({
-                "event": "connected",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {"status": "online", "message": f"Connected to @{self.username}"}
-            })
+        while not self.stop_event.is_set():
+            _log.info(f"🚀 [Room @{self.username}] Đang khởi động TikTokLiveClient...")
+            client = (
+                TikTokLiveClient(self.username)
+                .cookies(f"ttwid={current_token}")
+                .max_retries(10)
+                .stale_timeout(45.0)
+            )
+            if self.proxy:
+                client.proxy(self.proxy)
+            self.tiktok_client = client
 
-        @client.on(EventType.disconnected)
-        async def on_disconnected(evt: TikTokEvent):
-            self.is_connected = False
-            _log.info(f"🔌 [Room @{self.username}] Đã ngắt kết nối TikTok.")
-            await self.broadcast({
-                "event": "disconnected",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {"status": "offline", "message": "Disconnected from TikTok Live"}
-            })
-
-        @client.on(EventType.reconnecting)
-        async def on_reconnecting(evt: TikTokEvent):
-            d = evt.data or {}
-            await self.broadcast({
-                "event": "reconnecting",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": d,
-            })
-
-        # 2. Bình luận Chat
-        @client.on(EventType.chat)
-        async def on_chat(evt: TikTokEvent):
-            await self.broadcast({
-                "event": "chat",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {
-                    "user": serialize_user(evt),
-                    "comment": evt.comment,
-                }
-            })
-
-        # 3. Quà Tặng (Gift & Combo Streak)
-        @client.on(EventType.gift)
-        async def on_gift(evt: TikTokEvent):
-            data = evt.data or {}
-            streak = self.streak_tracker.process(data)
-            gift_obj = data.get("gift") or {}
-            await self.broadcast({
-                "event": "gift",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {
-                    "user": serialize_user(evt),
-                    "gift": {
-                        "id": int(gift_obj.get("id") or 0),
-                        "name": evt.gift_name,
-                        "diamond_count": int(gift_obj.get("diamond_count") or gift_obj.get("diamondCount") or 0),
-                        "image_url": str(gift_obj.get("image", {}).get("url_list", [""])[0]),
-                    },
-                    "combo": {
-                        "streak_id": streak.streak_id,
-                        "is_active": streak.is_active,
-                        "is_final": streak.is_final,
-                        "event_gift_count": streak.event_gift_count,
-                        "total_gift_count": streak.total_gift_count,
-                        "event_diamond_count": streak.event_diamond_count,
-                        "total_diamond_count": streak.total_diamond_count,
-                    }
-                }
-            })
-
-        # 4. Thả Tim (Like)
-        @client.on(EventType.like)
-        async def on_like(evt: TikTokEvent):
-            data = evt.data or {}
-            stats = self.like_acc.process(data)
-            await self.broadcast({
-                "event": "like",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {
-                    "user": serialize_user(evt),
-                    "event_like_count": stats.event_like_count,
-                    "total_like_count": stats.total_like_count,
-                }
-            })
-
-        # 5. Vào phòng / Follow / Share
-        @client.on(EventType.join)
-        async def on_join(evt: TikTokEvent):
-            await self.broadcast({
-                "event": "join",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {
-                    "user": serialize_user(evt),
-                    "viewer_count": evt.viewer_count,
-                }
-            })
-
-        @client.on(EventType.follow)
-        async def on_follow(evt: TikTokEvent):
-            await self.broadcast({
-                "event": "follow",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {
-                    "user": serialize_user(evt),
-                }
-            })
-
-        @client.on(EventType.share)
-        async def on_share(evt: TikTokEvent):
-            d = evt.data or {}
-            await self.broadcast({
-                "event": "share",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {
-                    "user": serialize_user(evt),
-                    "share_target": d.get("share_target") or d.get("shareTarget") or "friends",
-                }
-            })
-
-        # 6. Thống kê phòng Live (Room User Seq)
-        @client.on(EventType.room_user_seq)
-        async def on_user_seq(evt: TikTokEvent):
-            d = evt.data or {}
-            ranks_raw = d.get("ranks_list") or d.get("ranksList") or []
-            ranks = []
-            for r in ranks_raw[:10]:
-                u = r.get("user") or {}
-                ranks.append({
-                    "nickname": u.get("nickname") or "Anonymous",
-                    "score": int(r.get("score") or 0),
-                    "rank": int(r.get("rank") or 0),
+            # 1. Trạng thái kết nối
+            @client.on(EventType.connected)
+            async def on_connected(evt: TikTokEvent):
+                self.room_id = evt.room_id
+                self.is_connected = True
+                _log.info(f"🟢 [Room @{self.username}] Đã kết nối thành công! Room ID: {self.room_id}")
+                await self.broadcast({
+                    "event": "connected",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {"status": "online", "message": f"Connected to @{self.username}"}
                 })
-            await self.broadcast({
-                "event": "room_user_seq",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {
-                    "viewer_count": evt.viewer_count,
-                    "total_users": evt.total_users,
-                    "top_ranks": ranks,
-                }
-            })
 
-        # 7. TikTok Shop / Thương Mại Điện Tử (OEC LIVE SHOPPING)
-        @client.on(EventType.oec_live_shopping)
-        async def on_shopping(evt: TikTokEvent):
-            action_type = evt.action_type or 1
-            new_pid = evt.product_id
-            if new_pid:
-                self.active_product_id = new_pid
-                action_name = "SetPinProduct (Ghim sản phẩm mới)"
-                self.active_product_info = evt.canonical_product_info(region="vn")
-            else:
-                action_name = "CardRefresh (Duy trì / Làm mới hiển thị thẻ)"
+            @client.on(EventType.disconnected)
+            async def on_disconnected(evt: TikTokEvent):
+                self.is_connected = False
+                _log.info(f"🔌 [Room @{self.username}] Đã ngắt kết nối TikTok.")
+                await self.broadcast({
+                    "event": "disconnected",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {"status": "offline", "message": "Disconnected from TikTok Live"}
+                })
 
-            info = self.active_product_info or evt.canonical_product_info(region="vn", product_id=self.active_product_id)
-            pid = self.active_product_id or info.product_id
-            canonical_url = info.url or (f"https://shop.tiktok.com/vn/pdp/{pid}" if pid else "")
+            @client.on(EventType.reconnecting)
+            async def on_reconnecting(evt: TikTokEvent):
+                d = evt.data or {}
+                await self.broadcast({
+                    "event": "reconnecting",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": d,
+                })
 
-            await self.broadcast({
-                "event": "oec_live_shopping",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {
-                    "action_type": action_type,
-                    "action_name": action_name,
-                    "product_id": pid,
-                    "product_title": info.title,
-                    "product_image": info.image,
-                    "product_images": info.images,
-                    "product_url": canonical_url,
-                    "seller": info.seller,
-                    "sold_count": info.sold_count,
-                }
-            })
+            # 2. Bình luận Chat
+            @client.on(EventType.chat)
+            async def on_chat(evt: TikTokEvent):
+                await self.broadcast({
+                    "event": "chat",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {
+                        "user": serialize_user(evt),
+                        "comment": evt.comment,
+                    }
+                })
 
-        # 8. Đại gia nâng cấp VIP (Privilege Advance)
-        @client.on(EventType.privilege_advance)
-        async def on_privilege(evt: TikTokEvent):
-            d = evt.data or {}
-            await self.broadcast({
-                "event": "privilege_advance",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {
-                    "user": serialize_user(evt),
-                    "diamond_amount": int(d.get("diamondAmount") or d.get("diamond_amount") or 0),
-                    "badge_name": str(d.get("badgeName") or d.get("badge_name") or ""),
-                    "privilege_type": str(d.get("privilegeType") or d.get("privilege_type") or ""),
-                }
-            })
+            # 3. Quà Tặng (Gift & Combo Streak)
+            @client.on(EventType.gift)
+            async def on_gift(evt: TikTokEvent):
+                data = evt.data or {}
+                streak = self.streak_tracker.process(data)
+                gift_obj = data.get("gift") or {}
+                await self.broadcast({
+                    "event": "gift",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {
+                        "user": serialize_user(evt),
+                        "gift": {
+                            "id": int(gift_obj.get("id") or 0),
+                            "name": evt.gift_name,
+                            "diamond_count": int(gift_obj.get("diamond_count") or gift_obj.get("diamondCount") or 0),
+                            "image_url": str(gift_obj.get("image", {}).get("url_list", [""])[0]),
+                        },
+                        "combo": {
+                            "streak_id": streak.streak_id,
+                            "is_active": streak.is_active,
+                            "is_final": streak.is_final,
+                            "event_gift_count": streak.event_gift_count,
+                            "total_gift_count": streak.total_gift_count,
+                            "event_diamond_count": streak.event_diamond_count,
+                            "total_diamond_count": streak.total_diamond_count,
+                        }
+                    }
+                })
 
-        # 9. Host ghim tin nhắn / Deal (Room Pin)
-        @client.on(EventType.room_pin)
-        async def on_room_pin(evt: TikTokEvent):
-            d = evt.data or {}
-            await self.broadcast({
-                "event": "room_pin",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {
-                    "pinned_content": str(d.get("pinnedContent") or d.get("pinned_content") or ""),
-                    "pin_id": str(d.get("pinId") or d.get("pin_id") or ""),
-                    "action_type": int(d.get("actionType") or d.get("action_type") or 1),
-                }
-            })
+            # 4. Thả Tim (Like)
+            @client.on(EventType.like)
+            async def on_like(evt: TikTokEvent):
+                data = evt.data or {}
+                stats = self.like_acc.process(data)
+                await self.broadcast({
+                    "event": "like",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {
+                        "user": serialize_user(evt),
+                        "event_like_count": stats.event_like_count,
+                        "total_like_count": stats.total_like_count,
+                    }
+                })
 
-        # 10. Voucher / Banner khuyến mãi (In Room Banner)
-        @client.on(EventType.in_room_banner)
-        async def on_banner(evt: TikTokEvent):
-            d = evt.data or {}
-            await self.broadcast({
-                "event": "in_room_banner",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {
-                    "banner_id": str(d.get("bannerId") or d.get("banner_id") or ""),
-                    "title": str(d.get("title") or ""),
-                    "sub_title": str(d.get("subTitle") or d.get("sub_title") or ""),
-                    "image_url": str(d.get("imageUrl") or d.get("image_url") or ""),
-                }
-            })
+            # 5. Vào phòng / Follow / Share
+            @client.on(EventType.join)
+            async def on_join(evt: TikTokEvent):
+                await self.broadcast({
+                    "event": "join",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {
+                        "user": serialize_user(evt),
+                        "viewer_count": evt.viewer_count,
+                    }
+                })
 
-        # 11. Mục tiêu phòng Live (Goal Update)
-        @client.on(EventType.goal_update)
-        async def on_goal(evt: TikTokEvent):
-            d = evt.data or {}
-            await self.broadcast({
-                "event": "goal_update",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {
-                    "goal_id": str(d.get("goalId") or d.get("goal_id") or ""),
-                    "goal_type": str(d.get("goalType") or d.get("goal_type") or ""),
-                    "progress": int(d.get("progress") or 0),
-                    "target": int(d.get("target") or 0),
-                    "contributor_count": int(d.get("contributorCount") or d.get("contributor_count") or 0),
-                }
-            })
+            @client.on(EventType.follow)
+            async def on_follow(evt: TikTokEvent):
+                await self.broadcast({
+                    "event": "follow",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {
+                        "user": serialize_user(evt),
+                    }
+                })
 
-        # 12. Phụ đề lời nói AI thời gian thực (Caption)
-        @client.on(EventType.caption)
-        async def on_caption(evt: TikTokEvent):
-            d = evt.data or {}
-            await self.broadcast({
-                "event": "caption",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {
-                    "content": str(d.get("content") or ""),
-                    "language": str(d.get("language") or ""),
-                }
-            })
+            @client.on(EventType.share)
+            async def on_share(evt: TikTokEvent):
+                d = evt.data or {}
+                await self.broadcast({
+                    "event": "share",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {
+                        "user": serialize_user(evt),
+                        "share_target": d.get("share_target") or d.get("shareTarget") or "friends",
+                    }
+                })
 
-        # 13. Bao lì xì / Hộp kho báu (Envelope / Treasure Box)
-        @client.on(EventType.envelope)
-        async def on_envelope(evt: TikTokEvent):
-            d = evt.data or {}
-            await self.broadcast({
-                "event": "envelope",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {
-                    "user": serialize_user(evt),
-                    "treasure_box_id": str(d.get("treasureBoxId") or d.get("treasure_box_id") or ""),
-                    "diamond_count": int(d.get("diamondCount") or d.get("diamond_count") or 0),
-                    "people_count": int(d.get("peopleCount") or d.get("people_count") or 0),
-                }
-            })
+            # 6. Thống kê phòng Live (Room User Seq)
+            @client.on(EventType.room_user_seq)
+            async def on_user_seq(evt: TikTokEvent):
+                d = evt.data or {}
+                ranks_raw = d.get("ranks_list") or d.get("ranksList") or []
+                ranks = []
+                for r in ranks_raw[:10]:
+                    u = r.get("user") or {}
+                    ranks.append({
+                        "nickname": u.get("nickname") or "Anonymous",
+                        "score": int(r.get("score") or 0),
+                        "rank": int(r.get("rank") or 0),
+                    })
+                await self.broadcast({
+                    "event": "room_user_seq",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {
+                        "viewer_count": evt.viewer_count,
+                        "total_users": evt.total_users,
+                        "top_ranks": ranks,
+                    }
+                })
 
-        # 14. Câu hỏi Q&A mới (Question New)
-        @client.on(EventType.question_new)
-        async def on_question(evt: TikTokEvent):
-            d = evt.data or {}
-            await self.broadcast({
-                "event": "question_new",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {
-                    "user": serialize_user(evt),
-                    "question_id": str(d.get("questionId") or d.get("question_id") or ""),
-                    "question_text": str(d.get("questionText") or d.get("question_text") or d.get("content") or ""),
-                }
-            })
+            # 7. TikTok Shop / Thương Mại Điện Tử (OEC LIVE SHOPPING)
+            @client.on(EventType.oec_live_shopping)
+            async def on_shopping(evt: TikTokEvent):
+                action_type = evt.action_type or 1
+                new_pid = evt.product_id
+                if new_pid:
+                    self.active_product_id = new_pid
+                    action_name = "SetPinProduct (Ghim sản phẩm mới)"
+                    self.active_product_info = evt.canonical_product_info(region="vn")
+                else:
+                    action_name = "CardRefresh (Duy trì / Làm mới hiển thị thẻ)"
 
-        # 15. Trận đấu PK Battle (Link Mic Battle)
-        @client.on(EventType.link_mic_battle)
-        async def on_battle(evt: TikTokEvent):
-            d = evt.data or {}
-            await self.broadcast({
-                "event": "link_mic_battle",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {
-                    "battle_id": str(d.get("battleId") or d.get("battle_id") or ""),
-                    "status": str(d.get("battleStatus") or d.get("battle_status") or "active"),
-                }
-            })
+                info = self.active_product_info or evt.canonical_product_info(region="vn", product_id=self.active_product_id)
+                pid = self.active_product_id or info.product_id
+                canonical_url = info.url or (f"https://shop.tiktok.com/vn/pdp/{pid}" if pid else "")
 
-        # 16. Thông báo Subscriber mới (Sub Notify)
-        @client.on(EventType.sub_notify)
-        async def on_sub(evt: TikTokEvent):
-            d = evt.data or {}
-            await self.broadcast({
-                "event": "sub_notify",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {
-                    "user": serialize_user(evt),
-                    "sub_month": int(d.get("subMonth") or d.get("sub_month") or 1),
-                }
-            })
+                await self.broadcast({
+                    "event": "oec_live_shopping",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {
+                        "action_type": action_type,
+                        "action_name": action_name,
+                        "product_id": pid,
+                        "product_title": info.title,
+                        "product_image": info.image,
+                        "product_images": info.images,
+                        "product_url": canonical_url,
+                        "seller": info.seller,
+                        "sold_count": info.sold_count,
+                    }
+                })
 
-        # 17. Emoji / Sticker Chat (Emote Chat)
-        @client.on(EventType.emote_chat)
-        async def on_emote(evt: TikTokEvent):
-            d = evt.data or {}
-            await self.broadcast({
-                "event": "emote_chat",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {
-                    "user": serialize_user(evt),
-                    "emote_id": str(d.get("emoteId") or d.get("emote_id") or ""),
-                    "image_url": str(d.get("imageUrl") or d.get("image_url") or ""),
-                }
-            })
+            # 8. Đại gia nâng cấp VIP (Privilege Advance)
+            @client.on(EventType.privilege_advance)
+            async def on_privilege(evt: TikTokEvent):
+                d = evt.data or {}
+                await self.broadcast({
+                    "event": "privilege_advance",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {
+                        "user": serialize_user(evt),
+                        "diamond_amount": int(d.get("diamondAmount") or d.get("diamond_amount") or 0),
+                        "badge_name": str(d.get("badgeName") or d.get("badge_name") or ""),
+                        "privilege_type": str(d.get("privilegeType") or d.get("privilege_type") or ""),
+                    }
+                })
 
-        # 18. Sự kiện mở rộng chưa ánh xạ (Unknown fallback - Đảm bảo ZERO loss)
-        @client.on(EventType.unknown)
-        async def on_unknown(evt: TikTokEvent):
-            await self.broadcast({
-                "event": "unknown",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {
-                    "raw_type": getattr(evt, "raw_type", "unknown"),
-                    "payload": evt.data if isinstance(evt.data, dict) else {},
-                }
-            })
+            # 9. Host ghim tin nhắn / Deal (Room Pin)
+            @client.on(EventType.room_pin)
+            async def on_room_pin(evt: TikTokEvent):
+                d = evt.data or {}
+                await self.broadcast({
+                    "event": "room_pin",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {
+                        "pinned_content": str(d.get("pinnedContent") or d.get("pinned_content") or ""),
+                        "pin_id": str(d.get("pinId") or d.get("pin_id") or ""),
+                        "action_type": int(d.get("actionType") or d.get("action_type") or 1),
+                    }
+                })
 
-        # 19. Phòng Live kết thúc
-        @client.on(EventType.live_ended)
-        async def on_live_ended(evt: TikTokEvent):
-            _log.info(f"🛑 [Room @{self.username}] Buổi livestream đã kết thúc.")
-            await self.broadcast({
-                "event": "live_ended",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {"status": "ended", "message": "The live stream has ended."}
-            })
+            # 10. Voucher / Banner khuyến mãi (In Room Banner)
+            @client.on(EventType.in_room_banner)
+            async def on_banner(evt: TikTokEvent):
+                d = evt.data or {}
+                await self.broadcast({
+                    "event": "in_room_banner",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {
+                        "banner_id": str(d.get("bannerId") or d.get("banner_id") or ""),
+                        "title": str(d.get("title") or ""),
+                        "sub_title": str(d.get("subTitle") or d.get("sub_title") or ""),
+                        "image_url": str(d.get("imageUrl") or d.get("image_url") or ""),
+                    }
+                })
 
-        # Chạy vòng lặp kết nối và bắt lỗi cấu trúc chuẩn
-        try:
-            await client.connect()
-        except Exception as e:
-            _log.error(f"❌ [Room @{self.username}] Lỗi client: {e}")
-            err_str = str(e)
-            
-            # Phân loại mã lỗi chuẩn cho các hệ thống bên ngoài dễ xử lý
-            if isinstance(e, HostNotOnlineError) or "not currently live" in err_str.lower():
-                code = "HOST_NOT_ONLINE"
-                msg = f"Streamer @{self.username} hiện không phát sóng trực tiếp."
-            elif isinstance(e, UserNotFoundError) or "does not exist" in err_str.lower():
-                code = "USER_NOT_FOUND"
-                msg = f"Không tìm thấy tài khoản TikTok @{self.username}."
-            elif isinstance(e, DeviceBlockedError) or "DEVICE_BLOCKED" in err_str or "415" in err_str:
-                code = "DEVICE_BLOCKED"
-                msg = "Thiết bị bị TikTok cắm cờ (HTTP 415), client đang tự động cấp lại token mới."
-            elif "429" in err_str or "Too Many Requests" in err_str:
-                code = "RATE_LIMITED"
-                msg = "Quá nhiều kết nối trên cùng một địa chỉ IP (HTTP 429)."
-            elif isinstance(e, TikTokBlockedError) or "403" in err_str or "Forbidden" in err_str:
-                code = "IP_BLOCKED"
-                msg = "Địa chỉ IP bị tường lửa TikTok chặn (HTTP 403)."
-            elif isinstance(e, AgeRestrictedError) or "age-restricted" in err_str:
-                code = "AGE_RESTRICTED"
-                msg = "Phòng Live giới hạn độ tuổi 18+ (cần session cookie)."
-            elif "Timeout" in err_str:
-                code = "NETWORK_TIMEOUT"
-                msg = "Kết nối tới máy chủ TikTok bị quá thời gian chờ (Timeout)."
-            else:
-                code = type(e).__name__
-                msg = err_str
+            # 11. Mục tiêu phòng Live (Goal Update)
+            @client.on(EventType.goal_update)
+            async def on_goal(evt: TikTokEvent):
+                d = evt.data or {}
+                await self.broadcast({
+                    "event": "goal_update",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {
+                        "goal_id": str(d.get("goalId") or d.get("goal_id") or ""),
+                        "goal_type": str(d.get("goalType") or d.get("goal_type") or ""),
+                        "progress": int(d.get("progress") or 0),
+                        "target": int(d.get("target") or 0),
+                        "contributor_count": int(d.get("contributorCount") or d.get("contributor_count") or 0),
+                    }
+                })
 
-            await self.broadcast({
-                "event": "error",
-                "username": self.username,
-                "room_id": self.room_id,
-                "timestamp": get_iso_time(),
-                "data": {
-                    "code": code,
-                    "message": msg,
-                    "raw_error": err_str,
-                }
-            })
+            # 12. Phụ đề lời nói AI thời gian thực (Caption)
+            @client.on(EventType.caption)
+            async def on_caption(evt: TikTokEvent):
+                d = evt.data or {}
+                await self.broadcast({
+                    "event": "caption",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {
+                        "content": str(d.get("content") or ""),
+                        "language": str(d.get("language") or ""),
+                    }
+                })
+
+            # 13. Bao lì xì / Hộp kho báu (Envelope / Treasure Box)
+            @client.on(EventType.envelope)
+            async def on_envelope(evt: TikTokEvent):
+                d = evt.data or {}
+                await self.broadcast({
+                    "event": "envelope",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {
+                        "user": serialize_user(evt),
+                        "treasure_box_id": str(d.get("treasureBoxId") or d.get("treasure_box_id") or ""),
+                        "diamond_count": int(d.get("diamondCount") or d.get("diamond_count") or 0),
+                        "people_count": int(d.get("peopleCount") or d.get("people_count") or 0),
+                    }
+                })
+
+            # 14. Câu hỏi Q&A mới (Question New)
+            @client.on(EventType.question_new)
+            async def on_question(evt: TikTokEvent):
+                d = evt.data or {}
+                await self.broadcast({
+                    "event": "question_new",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {
+                        "user": serialize_user(evt),
+                        "question_id": str(d.get("questionId") or d.get("question_id") or ""),
+                        "question_text": str(d.get("questionText") or d.get("question_text") or d.get("content") or ""),
+                    }
+                })
+
+            # 15. Trận đấu PK Battle (Link Mic Battle)
+            @client.on(EventType.link_mic_battle)
+            async def on_battle(evt: TikTokEvent):
+                d = evt.data or {}
+                await self.broadcast({
+                    "event": "link_mic_battle",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {
+                        "battle_id": str(d.get("battleId") or d.get("battle_id") or ""),
+                        "status": str(d.get("battleStatus") or d.get("battle_status") or "active"),
+                    }
+                })
+
+            # 16. Thông báo Subscriber mới (Sub Notify)
+            @client.on(EventType.sub_notify)
+            async def on_sub(evt: TikTokEvent):
+                d = evt.data or {}
+                await self.broadcast({
+                    "event": "sub_notify",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {
+                        "user": serialize_user(evt),
+                        "sub_month": int(d.get("subMonth") or d.get("sub_month") or 1),
+                    }
+                })
+
+            # 17. Emoji / Sticker Chat (Emote Chat)
+            @client.on(EventType.emote_chat)
+            async def on_emote(evt: TikTokEvent):
+                d = evt.data or {}
+                await self.broadcast({
+                    "event": "emote_chat",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {
+                        "user": serialize_user(evt),
+                        "emote_id": str(d.get("emoteId") or d.get("emote_id") or ""),
+                        "image_url": str(d.get("imageUrl") or d.get("image_url") or ""),
+                    }
+                })
+
+            # 18. Sự kiện mở rộng chưa ánh xạ (Unknown fallback - Đảm bảo ZERO loss)
+            @client.on(EventType.unknown)
+            async def on_unknown(evt: TikTokEvent):
+                await self.broadcast({
+                    "event": "unknown",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {
+                        "raw_type": getattr(evt, "raw_type", "unknown"),
+                        "payload": evt.data if isinstance(evt.data, dict) else {},
+                    }
+                })
+
+            # 19. Phòng Live kết thúc
+            @client.on(EventType.live_ended)
+            async def on_live_ended(evt: TikTokEvent):
+                _log.info(f"🛑 [Room @{self.username}] Buổi livestream đã kết thúc.")
+                await self.broadcast({
+                    "event": "live_ended",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {"status": "ended", "message": "The live stream has ended."}
+                })
+
+            # Chạy vòng lặp kết nối và bắt lỗi cấu trúc chuẩn
+            try:
+                await client.connect()
+                if self.stop_event.is_set() or len(self.clients) == 0:
+                    break
+            except Exception as e:
+                _log.error(f"❌ [Room @{self.username}] Lỗi client: {e}")
+                err_str = str(e)
+                
+                # Phân loại mã lỗi chuẩn cho các hệ thống bên ngoài dễ xử lý
+                if isinstance(e, HostNotOnlineError) or "not currently live" in err_str.lower():
+                    code = "HOST_NOT_ONLINE"
+                    msg = f"Streamer @{self.username} hiện không phát sóng trực tiếp."
+                elif isinstance(e, UserNotFoundError) or "does not exist" in err_str.lower():
+                    code = "USER_NOT_FOUND"
+                    msg = f"Không tìm thấy tài khoản TikTok @{self.username}."
+                elif isinstance(e, DeviceBlockedError) or "DEVICE_BLOCKED" in err_str or "415" in err_str:
+                    code = "DEVICE_BLOCKED"
+                    msg = "Thiết bị bị TikTok cắm cờ (HTTP 415), client đang tự động cấp lại token mới."
+                elif "429" in err_str or "Too Many Requests" in err_str:
+                    code = "RATE_LIMITED"
+                    msg = "Quá nhiều kết nối trên cùng một địa chỉ IP (HTTP 429)."
+                elif isinstance(e, TikTokBlockedError) or "403" in err_str or "Forbidden" in err_str:
+                    code = "IP_BLOCKED"
+                    msg = "Địa chỉ IP bị tường lửa TikTok chặn (HTTP 403)."
+                elif isinstance(e, AgeRestrictedError) or "age-restricted" in err_str:
+                    code = "AGE_RESTRICTED"
+                    msg = "Phòng Live giới hạn độ tuổi 18+ (cần session cookie)."
+                elif "Timeout" in err_str:
+                    code = "NETWORK_TIMEOUT"
+                    msg = "Kết nối tới máy chủ TikTok bị quá thời gian chờ (Timeout)."
+                else:
+                    code = type(e).__name__
+                    msg = err_str
+
+                await self.broadcast({
+                    "event": "error",
+                    "username": self.username,
+                    "room_id": self.room_id,
+                    "timestamp": get_iso_time(),
+                    "data": {
+                        "code": code,
+                        "message": msg,
+                        "raw_error": err_str,
+                    }
+                })
+
+                if self.stop_event.is_set() or len(self.clients) == 0:
+                    break
+
+                # Nếu tài khoản không tồn tại hoặc streamer không live, dừng worker
+                if isinstance(e, (UserNotFoundError, HostNotOnlineError)) or "not exist" in err_str.lower() or "not currently live" in err_str.lower():
+                    break
+
+                # Nếu bị cắm cờ thiết bị (DEVICE_BLOCKED), tự động xoay TTWID token mới
+                if isinstance(e, DeviceBlockedError) or "DEVICE_BLOCKED" in err_str or "415" in err_str:
+                    try:
+                        from piratetok_live import get_ttwid
+                        current_token = get_ttwid(self.username, proxy=self.proxy, force_refresh=True)
+                    except Exception:
+                        pass
+
+                _log.info(f"🔄 [Room @{self.username}] Tự động thử kết nối lại sau {retry_delay:.1f}s...")
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 1.5, 30.0)
+
 
 
 class GatewayManager:
