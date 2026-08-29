@@ -6,7 +6,7 @@ Web Frontend, Unity Game Engine) kết nối qua giao thức WebSocket chuẩn �
 toàn bộ 100% sự kiện TikTok Live thời gian thực dưới định dạng JSON chuẩn hóa.
 
 Cách kết nối:
-    1. Query Param (Cực tiện cho Web/OBS):
+    1. Query Param (Cực tiện cho Web/OBS/Unity):
        ws://localhost:8765/live?username=swatchesbybaobao
 
     2. JSON Command (Cho Microservices / Backend):
@@ -14,6 +14,8 @@ Cách kết nối:
        -> Gửi: {"action": "subscribe", "username": "swatchesbybaobao"}
        -> Gửi: {"action": "unsubscribe", "username": "swatchesbybaobao"}
        -> Gửi: {"action": "list_rooms"}
+       -> Gửi: {"action": "get_room_status", "username": "swatchesbybaobao"}
+       -> Gửi: {"action": "stats"}
        -> Gửi: {"action": "ping"}
 
 Cách chạy server:
@@ -50,6 +52,14 @@ from piratetok_live import (
     TikTokEvent,
     TikTokLiveClient,
     get_ttwid,
+)
+from piratetok_live.errors import (
+    AgeRestrictedError,
+    DeviceBlockedError,
+    HostNotOnlineError,
+    TikTokApiError,
+    TikTokBlockedError,
+    UserNotFoundError,
 )
 
 # Cấu hình logging
@@ -109,6 +119,7 @@ class RoomHub:
         self.active_product_id: str = ""
         self.active_product_info: Optional[ProductInfo] = None
 
+        self.total_broadcasts = 0
         self.last_empty_time: Optional[float] = None
         self.created_at = time.time()
 
@@ -132,6 +143,7 @@ class RoomHub:
         """Gửi gói tin JSON tới toàn bộ client đang theo dõi phòng này."""
         if not self.clients:
             return
+        self.total_broadcasts += 1
         message_str = json.dumps(payload, ensure_ascii=False)
         stale_clients = []
         for ws in list(self.clients):
@@ -452,7 +464,100 @@ class RoomHub:
                 }
             })
 
-        # 13. Phòng Live kết thúc
+        # 13. Bao lì xì / Hộp kho báu (Envelope / Treasure Box)
+        @client.on(EventType.envelope)
+        async def on_envelope(evt: TikTokEvent):
+            d = evt.data or {}
+            await self.broadcast({
+                "event": "envelope",
+                "username": self.username,
+                "room_id": self.room_id,
+                "timestamp": get_iso_time(),
+                "data": {
+                    "user": serialize_user(evt),
+                    "treasure_box_id": str(d.get("treasureBoxId") or d.get("treasure_box_id") or ""),
+                    "diamond_count": int(d.get("diamondCount") or d.get("diamond_count") or 0),
+                    "people_count": int(d.get("peopleCount") or d.get("people_count") or 0),
+                }
+            })
+
+        # 14. Câu hỏi Q&A mới (Question New)
+        @client.on(EventType.question_new)
+        async def on_question(evt: TikTokEvent):
+            d = evt.data or {}
+            await self.broadcast({
+                "event": "question_new",
+                "username": self.username,
+                "room_id": self.room_id,
+                "timestamp": get_iso_time(),
+                "data": {
+                    "user": serialize_user(evt),
+                    "question_id": str(d.get("questionId") or d.get("question_id") or ""),
+                    "question_text": str(d.get("questionText") or d.get("question_text") or d.get("content") or ""),
+                }
+            })
+
+        # 15. Trận đấu PK Battle (Link Mic Battle)
+        @client.on(EventType.link_mic_battle)
+        async def on_battle(evt: TikTokEvent):
+            d = evt.data or {}
+            await self.broadcast({
+                "event": "link_mic_battle",
+                "username": self.username,
+                "room_id": self.room_id,
+                "timestamp": get_iso_time(),
+                "data": {
+                    "battle_id": str(d.get("battleId") or d.get("battle_id") or ""),
+                    "status": str(d.get("battleStatus") or d.get("battle_status") or "active"),
+                }
+            })
+
+        # 16. Thông báo Subscriber mới (Sub Notify)
+        @client.on(EventType.sub_notify)
+        async def on_sub(evt: TikTokEvent):
+            d = evt.data or {}
+            await self.broadcast({
+                "event": "sub_notify",
+                "username": self.username,
+                "room_id": self.room_id,
+                "timestamp": get_iso_time(),
+                "data": {
+                    "user": serialize_user(evt),
+                    "sub_month": int(d.get("subMonth") or d.get("sub_month") or 1),
+                }
+            })
+
+        # 17. Emoji / Sticker Chat (Emote Chat)
+        @client.on(EventType.emote_chat)
+        async def on_emote(evt: TikTokEvent):
+            d = evt.data or {}
+            await self.broadcast({
+                "event": "emote_chat",
+                "username": self.username,
+                "room_id": self.room_id,
+                "timestamp": get_iso_time(),
+                "data": {
+                    "user": serialize_user(evt),
+                    "emote_id": str(d.get("emoteId") or d.get("emote_id") or ""),
+                    "image_url": str(d.get("imageUrl") or d.get("image_url") or ""),
+                }
+            })
+
+        # 18. Sự kiện mở rộng chưa ánh xạ (Unknown fallback - Đảm bảo ZERO loss)
+        @client.on(EventType.unknown)
+        async def on_unknown(evt: TikTokEvent):
+            await self.broadcast({
+                "event": "unknown",
+                "username": self.username,
+                "room_id": self.room_id,
+                "timestamp": get_iso_time(),
+                "data": {
+                    "raw_type": getattr(evt, "raw_type", "unknown"),
+                    "payload": evt.data if isinstance(evt.data, dict) else {},
+                }
+            })
+
+        # 19. Phòng Live kết thúc
         @client.on(EventType.live_ended)
         async def on_live_ended(evt: TikTokEvent):
             _log.info(f"🛑 [Room @{self.username}] Buổi livestream đã kết thúc.")
@@ -464,17 +569,49 @@ class RoomHub:
                 "data": {"status": "ended", "message": "The live stream has ended."}
             })
 
-        # Chạy vòng lặp kết nối
+        # Chạy vòng lặp kết nối và bắt lỗi cấu trúc chuẩn
         try:
             await client.connect()
         except Exception as e:
             _log.error(f"❌ [Room @{self.username}] Lỗi client: {e}")
+            err_str = str(e)
+            
+            # Phân loại mã lỗi chuẩn cho các hệ thống bên ngoài dễ xử lý
+            if isinstance(e, HostNotOnlineError) or "not currently live" in err_str.lower():
+                code = "HOST_NOT_ONLINE"
+                msg = f"Streamer @{self.username} hiện không phát sóng trực tiếp."
+            elif isinstance(e, UserNotFoundError) or "does not exist" in err_str.lower():
+                code = "USER_NOT_FOUND"
+                msg = f"Không tìm thấy tài khoản TikTok @{self.username}."
+            elif isinstance(e, DeviceBlockedError) or "DEVICE_BLOCKED" in err_str or "415" in err_str:
+                code = "DEVICE_BLOCKED"
+                msg = "Thiết bị bị TikTok cắm cờ (HTTP 415), client đang tự động cấp lại token mới."
+            elif "429" in err_str or "Too Many Requests" in err_str:
+                code = "RATE_LIMITED"
+                msg = "Quá nhiều kết nối trên cùng một địa chỉ IP (HTTP 429)."
+            elif isinstance(e, TikTokBlockedError) or "403" in err_str or "Forbidden" in err_str:
+                code = "IP_BLOCKED"
+                msg = "Địa chỉ IP bị tường lửa TikTok chặn (HTTP 403)."
+            elif isinstance(e, AgeRestrictedError) or "age-restricted" in err_str:
+                code = "AGE_RESTRICTED"
+                msg = "Phòng Live giới hạn độ tuổi 18+ (cần session cookie)."
+            elif "Timeout" in err_str:
+                code = "NETWORK_TIMEOUT"
+                msg = "Kết nối tới máy chủ TikTok bị quá thời gian chờ (Timeout)."
+            else:
+                code = type(e).__name__
+                msg = err_str
+
             await self.broadcast({
                 "event": "error",
                 "username": self.username,
                 "room_id": self.room_id,
                 "timestamp": get_iso_time(),
-                "data": {"error": str(e), "type": type(e).__name__}
+                "data": {
+                    "code": code,
+                    "message": msg,
+                    "raw_error": err_str,
+                }
             })
 
 
@@ -486,6 +623,7 @@ class GatewayManager:
         self.idle_timeout = idle_timeout
         self.rooms: Dict[str, RoomHub] = {}
         self.master_ttwid: str = ""
+        self.start_time = time.time()
         self._lock = asyncio.Lock()
 
     async def initialize(self):
@@ -531,9 +669,20 @@ class GatewayManager:
                 "is_connected": hub.is_connected,
                 "clients_count": len(hub.clients),
                 "active_product_id": hub.active_product_id,
+                "total_broadcasts": hub.total_broadcasts,
                 "uptime_seconds": int(time.time() - hub.created_at),
             })
         return info
+
+    def get_gateway_stats(self) -> Dict[str, Any]:
+        total_clients = sum(len(h.clients) for h in self.rooms.values())
+        total_events = sum(h.total_broadcasts for h in self.rooms.values())
+        return {
+            "active_rooms": len(self.rooms),
+            "total_connected_clients": total_clients,
+            "total_events_broadcasted": total_events,
+            "server_uptime_seconds": int(time.time() - self.start_time),
+        }
 
 
 async def handle_connection(ws: ServerConnection, manager: GatewayManager):
@@ -566,7 +715,7 @@ async def handle_connection(ws: ServerConnection, manager: GatewayManager):
             except Exception:
                 await ws.send(json.dumps({
                     "event": "error",
-                    "message": "Invalid JSON message format",
+                    "data": {"code": "INVALID_JSON", "message": "Invalid JSON message format"},
                     "timestamp": get_iso_time(),
                 }))
                 continue
@@ -578,7 +727,7 @@ async def handle_connection(ws: ServerConnection, manager: GatewayManager):
                 if not target_user:
                     await ws.send(json.dumps({
                         "event": "error",
-                        "message": "Missing 'username' parameter in subscribe action",
+                        "data": {"code": "MISSING_PARAM", "message": "Missing 'username' parameter in subscribe action"},
                         "timestamp": get_iso_time(),
                     }))
                     continue
@@ -608,12 +757,47 @@ async def handle_connection(ws: ServerConnection, manager: GatewayManager):
                         "timestamp": get_iso_time(),
                     }))
 
+            elif action == "get_room_status":
+                target_user = cmd.get("username") or cmd.get("room")
+                if target_user:
+                    clean_u = target_user.strip().lstrip("@").lower()
+                    hub = manager.rooms.get(clean_u)
+                    if hub:
+                        await ws.send(json.dumps({
+                            "event": "room_status",
+                            "username": clean_u,
+                            "room_id": hub.room_id,
+                            "is_connected": hub.is_connected,
+                            "clients_count": len(hub.clients),
+                            "active_product_id": hub.active_product_id,
+                            "total_broadcasts": hub.total_broadcasts,
+                            "uptime_seconds": int(time.time() - hub.created_at),
+                            "timestamp": get_iso_time(),
+                        }, ensure_ascii=False))
+                    else:
+                        await ws.send(json.dumps({
+                            "event": "room_status",
+                            "username": clean_u,
+                            "is_connected": False,
+                            "clients_count": 0,
+                            "message": "Room is not active",
+                            "timestamp": get_iso_time(),
+                        }))
+
             elif action == "list_rooms":
                 rooms_info = manager.list_rooms_info()
                 await ws.send(json.dumps({
                     "event": "rooms_list",
                     "rooms": rooms_info,
                     "total_active_rooms": len(rooms_info),
+                    "timestamp": get_iso_time(),
+                }, ensure_ascii=False))
+
+            elif action == "stats":
+                stats_info = manager.get_gateway_stats()
+                await ws.send(json.dumps({
+                    "event": "gateway_stats",
+                    "data": stats_info,
                     "timestamp": get_iso_time(),
                 }, ensure_ascii=False))
 
@@ -626,7 +810,7 @@ async def handle_connection(ws: ServerConnection, manager: GatewayManager):
             else:
                 await ws.send(json.dumps({
                     "event": "error",
-                    "message": f"Unknown action: '{action}'",
+                    "data": {"code": "UNKNOWN_ACTION", "message": f"Unknown action: '{action}'"},
                     "timestamp": get_iso_time(),
                 }))
 
