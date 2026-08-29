@@ -1,6 +1,7 @@
 import threading
 import time
-from typing import Optional, Union
+from typing import Any, Optional, Union
+
 
 from ..auth.ttwid import fetch_ttwid
 from ..errors import (
@@ -101,13 +102,38 @@ class ProfileCache:
                 return None
             if isinstance(entry.value, Exception):
                 return None
+    def get(self, username: str) -> Optional[Any]:
+        """Return cached value or raise cached exception."""
+        key = _normalize_key(username)
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            if (time.monotonic() - entry.inserted_at) >= self._ttl:
+                return None
+            if isinstance(entry.value, Exception):
+                raise entry.value
             return entry.value
+
+    def set(self, username: str, profile: Any) -> None:
+        """Manually store an entry in cache."""
+        key = _normalize_key(username)
+        with self._lock:
+            self._entries[key] = _CacheEntry(profile)
+
+
+    def set_error(self, username: str, error: Exception) -> None:
+        """Manually store an error entry in negative cache."""
+        key = _normalize_key(username)
+        with self._lock:
+            self._entries[key] = _CacheEntry(error)
 
     def invalidate(self, username: str) -> None:
         """Remove one entry from cache."""
         key = _normalize_key(username)
         with self._lock:
             self._entries.pop(key, None)
+
 
     def invalidate_all(self) -> None:
         """Clear entire cache."""

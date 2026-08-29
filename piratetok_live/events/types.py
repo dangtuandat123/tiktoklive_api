@@ -152,8 +152,8 @@ class TikTokEvent(NamedTuple):
     def repeat_count(self) -> int:
         """Số lượng quà trong combo nếu là sự kiện Gift."""
         if isinstance(self.data, dict):
-            return int(self.data.get("repeat_count") or self.data.get("repeatCount") or 1)
-        return 1
+            return int(self.data.get("repeat_count") or self.data.get("repeatCount") or 0)
+        return 0
 
     @property
     def diamond_count(self) -> int:
@@ -164,7 +164,6 @@ class TikTokEvent(NamedTuple):
 
     @property
     def user_unique_id(self) -> str:
-
         """Tên tài khoản duy nhất (TikTok Handle) của người dùng."""
         u = self.user
         return str(u.get("unique_id") or u.get("uniqueId") or "")
@@ -187,8 +186,9 @@ class TikTokEvent(NamedTuple):
     def like_count(self) -> int:
         """Số lượt tim vừa thả nếu là sự kiện Like."""
         if isinstance(self.data, dict):
-            return int(self.data.get("count") or 1)
-        return 1
+            return int(self.data.get("count") or 0)
+        return 0
+
 
     @property
     def total_likes(self) -> int:
@@ -358,37 +358,54 @@ class TikTokEvent(NamedTuple):
     @property
     def is_host(self) -> bool:
         """Khán giả có phải là Streamer / Chủ phòng hay không."""
-        ident = self.user.get("user_identity") or self.user.get("userIdentity") or {}
+        if not isinstance(self.data, dict):
+            return False
+        ident = self.data.get("user_identity") or self.data.get("userIdentity") or self.user.get("user_identity") or self.user.get("userIdentity") or {}
         return bool(ident.get("is_anchor") or ident.get("isAnchor"))
 
     @property
     def is_mod(self) -> bool:
         """Khán giả có phải là Quản trị viên (Moderator) hay không."""
-        ident = self.user.get("user_identity") or self.user.get("userIdentity") or {}
-        return bool(ident.get("is_moderator") or ident.get("isModerator"))
+        if not isinstance(self.data, dict):
+            return False
+        ident = self.data.get("user_identity") or self.data.get("userIdentity") or self.user.get("user_identity") or self.user.get("userIdentity") or {}
+        attr = self.user.get("user_attr") or self.user.get("userAttr") or {}
+        return bool(ident.get("is_moderator") or ident.get("isModerator") or ident.get("is_moderator_of_anchor") or attr.get("is_admin"))
 
     @property
     def is_sub(self) -> bool:
         """Khán giả có phải là Hội viên trả phí (Subscriber) hay không."""
-        ident = self.user.get("user_identity") or self.user.get("userIdentity") or {}
-        return bool(ident.get("is_subscriber") or ident.get("isSubscriber"))
+        if not isinstance(self.data, dict):
+            return False
+        ident = self.data.get("user_identity") or self.data.get("userIdentity") or self.user.get("user_identity") or self.user.get("userIdentity") or {}
+        return bool(ident.get("is_subscriber") or ident.get("isSubscriber") or ident.get("is_subscriber_of_anchor"))
 
     @property
     def is_fan(self) -> bool:
         """Khán giả có tham gia Câu lạc bộ Fan Club hay không."""
-        fc = self.user.get("fans_club_info") or self.user.get("fansClubInfo") or {}
-        return bool(fc.get("club_name") or fc.get("clubName"))
+        if not isinstance(self.data, dict):
+            return False
+        fc = self.user.get("fans_club") or self.user.get("fansClub") or self.user.get("fans_club_info") or self.user.get("fansClubInfo") or {}
+        fc_data = fc.get("data") if isinstance(fc.get("data"), dict) else fc
+        return bool(fc_data.get("club_name") or fc_data.get("clubName"))
 
     @property
     def fans_club_name(self) -> str:
         """Tên câu lạc bộ Fan Club của người dùng."""
-        fc = self.user.get("fans_club_info") or self.user.get("fansClubInfo") or {}
-        return str(fc.get("club_name") or fc.get("clubName") or "")
+        if not isinstance(self.data, dict):
+            return ""
+        fc = self.user.get("fans_club") or self.user.get("fansClub") or self.user.get("fans_club_info") or self.user.get("fansClubInfo") or {}
+        fc_data = fc.get("data") if isinstance(fc.get("data"), dict) else fc
+        return str(fc_data.get("club_name") or fc_data.get("clubName") or "")
 
     @property
     def fans_club_level(self) -> int:
         """Cấp độ Fan Club của người dùng."""
-        fc = self.user.get("fans_club_info") or self.user.get("fansClubInfo") or {}
-        return int(fc.get("level") or 0)
+        if not isinstance(self.data, dict):
+            return 0
+        fc = self.user.get("fans_club") or self.user.get("fansClub") or self.user.get("fans_club_info") or self.user.get("fansClubInfo") or {}
+        fc_data = fc.get("data") if isinstance(fc.get("data"), dict) else fc
+        return int(fc_data.get("level") or 0)
+
 
 
